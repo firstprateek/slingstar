@@ -48,6 +48,27 @@ export function solveWindowDeg(zone) {
   return CONFIG.SOLVE_WINDOW_DEG_Z1 + (CONFIG.SOLVE_WINDOW_DEG_Z6 - CONFIG.SOLVE_WINDOW_DEG_Z1) * zoneT(zone);
 }
 
+/**
+ * Speed the solvability time rule assumes on the planet being left (Phase 4): the zone's base speed
+ * × SOLVE_WINDOW_SPEED_FACTOR (by default the speed cap, the fastest the comet can orbit there).
+ * The zone is the target's (the zone you are in while it is the next target). @param {number} zone
+ */
+export function solveWindowSpeed(zone) {
+  return baseSpeedForZone(zone) * CONFIG.SOLVE_WINDOW_SPEED_FACTOR;
+}
+
+/**
+ * Required release window in degrees on an orbit of radius `rho` (Phase 4): the zone's degree rule
+ * (solveWindowDeg) or, if wider, SOLVE_WINDOW_MIN_S of orbiting at solveWindowSpeed — the window
+ * is guaranteed in time as well as in angle, since angular speed (speed / radius) keeps rising.
+ * @param {number} zone @param {number} rho
+ */
+export function solveWindowReqDeg(zone, rho) {
+  const deg = solveWindowDeg(zone);
+  const t = (CONFIG.SOLVE_WINDOW_MIN_S * solveWindowSpeed(zone) / rho) * (180 / Math.PI);
+  return t > deg ? t : deg;
+}
+
 /** Max centre-to-centre path spacing for a zone. @param {number} zone */
 export function pathSpacingMax(zone) {
   let t = (zone - 1) / (CONFIG.PATH_SPACING_LATE_ZONE - 1);
@@ -87,8 +108,8 @@ export function comboBreak(w, reason) {
 }
 
 /**
- * Record that a path planet was caught. Updates pathReached, zone and base speed; emits
- * ZONE_CHANGE when the zone rises.
+ * Record that a path planet was caught. Updates pathReached, zone and base speed (raising the
+ * comet's speed, and its velocity with it, to the new base speed); emits ZONE_CHANGE when the zone rises.
  * @param {WorldT} w @param {number} pathIndex
  */
 export function reachPath(w, pathIndex) {
@@ -100,7 +121,13 @@ export function reachPath(w, pathIndex) {
     pushEvent(w.events, EV.ZONE_CHANGE, w.comet.x, w.comet.y, z, s.zone);
     s.zone = z;
     w.baseSpeed = baseSpeedForZone(z);
-    if (w.comet.speed < w.baseSpeed) w.comet.speed = w.baseSpeed;
+    const c = w.comet;
+    if (c.speed < w.baseSpeed) {
+      // Keep the velocity in step with the speed (Phase 4: c.v / c.speed must stay a unit vector).
+      const k = c.speed > 0 ? w.baseSpeed / c.speed : 0;
+      c.vx *= k; c.vy *= k;
+      c.speed = w.baseSpeed;
+    }
   }
 }
 

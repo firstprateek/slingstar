@@ -198,10 +198,12 @@ function boot(renderer) {
       showTitle();
     },
     onSound(on) {
-      audio.unlock();
       settings.sound = on;
       saveSettings();
+      // Enable first, then unlock inside this tap: turning sound on creates / resumes the context;
+      // turning it off suspends it (unlock does nothing while sound is off).
       audio.setEnabled(on);
+      audio.unlock();
     },
     onPause() {
       audio.unlock();
@@ -430,6 +432,11 @@ function boot(renderer) {
     let dtReal = rawMs / 1000;
     if (dtReal > CONFIG.MAX_FRAME_DT) dtReal = CONFIG.MAX_FRAME_DT;
     if (dtReal < 0) dtReal = 0;
+
+    // WebGL context lost mid-run (iOS does this in the foreground under memory pressure): the
+    // screen is black, so stop the run behind "Tap to resume", like a hide. Resuming keeps the
+    // orbit; while the context is still lost, PLAYING comes straight back here.
+    if (screen === SCREEN.PLAYING && renderer.isContextLost()) go(SCREEN.RESUME);
 
     // Input: sample once per frame; edges wait for the first step that runs.
     input.sample(sampled);

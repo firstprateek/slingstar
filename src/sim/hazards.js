@@ -19,6 +19,9 @@ const BH_G = CONFIG.BLACKHOLE_G, BH_MAX = CONFIG.BLACKHOLE_MAX_ACCEL;
 /** Body flags whose position changes with time (moons move too: check `type`). */
 export const MOVING_FLAGS = BODY_FLAG.DRIFTING | BODY_FLAG.BINARY;
 
+/** blackHoleAccelAt input: BHQ[0], BHQ[1] = the position to evaluate. */
+export const BHQ = new Float64Array(2);
+
 /** posAt input: MT[0] = absolute world time. */
 export const MT = new Float64Array(1);
 /** posAt output: MP[0], MP[1] = centre at time MT[0]. */
@@ -29,6 +32,40 @@ export const MP = new Float64Array(2);
  * as a point with reach m0; moon: its parent's envelope with reach + m0).
  */
 export const ENV = new Float64Array(5);
+
+/**
+ * Binary partner of slot i (the other member of its pair), or -1: not a binary member, or the
+ * partner has been recycled (freeing a member clears its partner's `parent`).
+ * @param {import('../contracts.js').Bodies} b @param {number} i
+ */
+export function partnerOf(b, i) {
+  if (b.type[i] !== BODY.PLANET || !(b.flags[i] & BODY_FLAG.BINARY)) return -1;
+  const p = b.parent[i];
+  return p >= 0 && p !== i && b.alive[p] === 1 && b.type[p] === BODY.PLANET && b.parent[p] === i ? p : -1;
+}
+
+/** maxSpeedOf output: VS[0] = the most a body can move per second. */
+export const VS = new Float64Array(1);
+
+/** Non-moon speed bound into VS[0]. @param {import('../contracts.js').Bodies} b @param {number} i */
+function baseSpeedBound(b, i) {
+  const f = b.flags[i];
+  if (f & BODY_FLAG.BINARY) VS[0] = Math.abs(b.m1[i]) * b.m0[i];
+  else if (f & BODY_FLAG.DRIFTING) VS[0] = b.m2[i] > 0 ? Math.abs(b.m1[i]) * TAU / b.m2[i] : 0;
+  else VS[0] = 0;
+}
+
+/**
+ * Upper bound on body i's speed (units/s) into VS[0]: |ω| m0 around a binary circle, the peak of
+ * a drift, a moon's own |ω| m0 plus its parent's. Static bodies: 0.
+ * @param {import('../contracts.js').Bodies} b @param {number} i
+ */
+export function maxSpeedOf(b, i) {
+  if (b.type[i] !== BODY.MOON) { baseSpeedBound(b, i); return; }
+  const p = b.parent[i];
+  if (p >= 0 && b.alive[p]) baseSpeedBound(b, p); else VS[0] = 0;
+  VS[0] += Math.abs(b.m1[i]) * b.m0[i];
+}
 
 /** @param {import('../contracts.js').Bodies} b @param {number} i */
 export function isMoving(b, i) {
@@ -124,8 +161,18 @@ export function placeMotion(world, i) {
  * @param {import('../contracts.js').WorldT} world @param {Float64Array} out
  */
 export function blackHoleAccel(world, out) {
-  const b = world.bodies, c = world.comet, n = b.count;
-  const cx = c.x, cy = c.y;
+  BHQ[0] = world.comet.x; BHQ[1] = world.comet.y;
+  blackHoleAccelAt(world, out);
+}
+
+/**
+ * Black-hole acceleration at the point (BHQ[0], BHQ[1]) into out[0], out[1]. The one formula both
+ * free flight and the aim forecast use, so the forecast of a bent path is bit-exact.
+ * @param {import('../contracts.js').WorldT} world @param {Float64Array} out
+ */
+export function blackHoleAccelAt(world, out) {
+  const b = world.bodies, n = b.count;
+  const cx = BHQ[0], cy = BHQ[1];
   let ax = 0, ay = 0;
   for (let i = 0; i < n; i++) {
     if (!b.alive[i] || b.type[i] !== BODY.BLACKHOLE) continue;

@@ -8,7 +8,7 @@ import { CONFIG } from '../config.js';
 import { COMET } from '../contracts.js';
 import { createProgram, createQuadBuffer } from './gl.js';
 import {
-  SPRITES_VS, SPRITES_FS, TRAIL_VS, TRAIL_FS, FRONT_VS, FRONT_FS, SHAPE,
+  SPRITES_VS, SPRITES_FS, TRAIL_VS, TRAIL_FS, FRONT_VS, FRONT_FS, SHAPE, FRONT_NOISE_SIZE, FRONT_NOISE_CELLS,
 } from './shaders/fx.js';
 
 const MAX_SPRITES = 384;
@@ -16,6 +16,38 @@ const SSTRIDE = 12;
 const TRAIL_POINTS = 160;
 const PULSES = 16;
 const FRONT_GLOW_ABOVE = 760;
+/** Ring-pulse quads reach this many ring widths past the ring (must match SPRITES_FS shape 3). */
+const RING_REACH = 8;
+
+/** PCG integer hash (same as the GLSL `pcg`). @param {number} v */
+function pcg(v) {
+  const st = (Math.imul(v >>> 0, 747796405) + 2891336453) >>> 0;
+  const w = Math.imul(((st >>> ((st >>> 28) + 4)) ^ st) >>> 0, 277803737) >>> 0;
+  return ((w >>> 22) ^ w) >>> 0;
+}
+
+/**
+ * Bake the front's tileable value noise once (module load): FRONT_NOISE_CELLS lattice cells with
+ * integer-hashed values and smoothstep interpolation, periodic on the tile. R8.
+ */
+const FRONT_NOISE = (() => {
+  const N = FRONT_NOISE_SIZE, C = FRONT_NOISE_CELLS, per = N / C;
+  const lat = new Float32Array(C * C);
+  for (let y = 0; y < C; y++) for (let x = 0; x < C; x++) lat[y * C + x] = (pcg(x ^ pcg(y ^ pcg(0x5f3))) >>> 8) / 16777216;
+  const out = new Uint8Array(N * N);
+  for (let y = 0; y < N; y++) {
+    const gy = (y + 0.5) / per, iy = Math.floor(gy), fy = gy - iy, uy = fy * fy * (3 - 2 * fy);
+    const y0 = iy % C, y1 = (iy + 1) % C;
+    for (let x = 0; x < N; x++) {
+      const gx = (x + 0.5) / per, ix = Math.floor(gx), fx = gx - ix, ux = fx * fx * (3 - 2 * fx);
+      const x0 = ix % C, x1 = (ix + 1) % C;
+      const a = lat[y0 * C + x0], b = lat[y0 * C + x1], c = lat[y1 * C + x0], d = lat[y1 * C + x1];
+      const v = (a + (b - a) * ux) + ((c + (d - c) * ux) - (a + (b - a) * ux)) * uy;
+      out[y * N + x] = Math.round(v * 255);
+    }
+  }
+  return out;
+})();
 
 export function createFx() {
   /** @type {import('./gl.js').Program | null} */
@@ -32,6 +64,8 @@ export function createFx() {
   let trailVao = null;
   /** @type {WebGLBuffer | null} */
   let trailBuf = null;
+  /** @type {WebGLTexture | null} */
+  let noiseTex = null;
 
   const sprites = new Float32Array(MAX_SPRITES * SSTRIDE);
   let spriteCount = 0;
@@ -71,7 +105,17 @@ export function createFx() {
       spriteProg = createProgram(gl, SPRITES_VS, SPRITES_FS, 'sprites', ['uScale'], ['aCorner', 'aA', 'aB', 'aC']);
       trailProg = createProgram(gl, TRAIL_VS, TRAIL_FS, 'trail', ['uScale', 'uColor'], ['aV']);
       frontProg = createProgram(gl, FRONT_VS, FRONT_FS, 'front',
-        ['uRect', 'uRes', 'uView', 'uFrontRel', 'uCamX', 'uAcc', 'uTime', 'uGlowTop']);
+        ['uRect', 'uRes', 'uView', 'uFrontRel', 'uCamX', 'uAcc', 'uTime', 'uGlowTop', 'uNoise']);
+      noiseTex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, noiseTex);
+      gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, FRONT_NOISE_SIZE, FRONT_NOISE_SIZE, 0, gl.RED, gl.UNSIGNED_BYTE, FRONT_NOISE);
+      gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+      gl.bindTexture(gl.TEXTURE_2D, null);
 
       spriteVao = gl.createVertexArray();
       gl.bindVertexArray(spriteVao);
@@ -188,12 +232,33 @@ export function createFx() {
         const clear = aim.clear;
         const r = clear ? accent[0] * 2.2 : 0.62, g = clear ? accent[1] * 2.2 : 0.66, b = clear ? accent[2] * 2.2 : 0.75;
         const ox = cam.cometX - vx, oy = cam.cometY - vy;
+        // Dots walk the forecast path (aim.points: offsets from the comet, bent through black-hole
+        // influence; 2 vertices when straight). Without a path, the straight tangent.
+        const pts = aim.points;
+        const np = pts && aim.pointCount >= 2 ? aim.pointCount : 0;
+        let j = 0, segS = 0, segL = 0, ax = 0, ay = 0, ux = aim.dx, uy = aim.dy;
+        if (np) {
+          ax = pts[0]; ay = pts[1];
+          const ex = pts[2] - ax, ey = pts[3] - ay;
+          segL = Math.sqrt(ex * ex + ey * ey);
+          if (segL > 1e-6) { ux = ex / segL; uy = ey / segL; }
+        }
         for (let s = sp + march; s < aim.length; s += sp) {
+          if (np) {
+            while (s > segS + segL && j + 2 < np) {
+              segS += segL; j++;
+              ax = pts[j * 2]; ay = pts[j * 2 + 1];
+              const ex = pts[j * 2 + 2] - ax, ey = pts[j * 2 + 3] - ay;
+              segL = Math.sqrt(ex * ex + ey * ey);
+              if (segL > 1e-6) { ux = ex / segL; uy = ey / segL; }
+            }
+          }
           const f = s / aim.length;
           const k = (1 - f * f * 0.85) * (s < 50 ? (s - 20) / 30 : 1);
           if (k <= 0) continue;
           const sz = clear ? 15 : 13;
-          S[0] = ox + aim.dx * s; S[1] = oy + aim.dy * s; S[2] = sz; S[3] = sz; S[4] = 1; S[5] = 0;
+          const along = s - segS;
+          S[0] = ox + ax + ux * along; S[1] = oy + ay + uy * along; S[2] = sz; S[3] = sz; S[4] = 1; S[5] = 0;
           S[6] = SHAPE.DOT; S[7] = 0; S[8] = r; S[9] = g; S[10] = b; S[11] = k;
           commitSprite();
         }
@@ -223,8 +288,13 @@ export function createFx() {
         const e = 1 - (1 - t) * (1 - t) * (1 - t);
         const R = pulse[o + 4];
         const fadeK = (1 - t) * (1 - t) * 1.6;
-        S[0] = pulse[o] - vx; S[1] = pulse[o + 1] - vy; S[2] = R; S[3] = R; S[4] = 1; S[5] = 0;
-        S[6] = SHAPE.RING; S[7] = e * 0.96 + 0.02; S[8] = pulse[o + 5]; S[9] = pulse[o + 6];
+        // Quad = current ring radius + RING_REACH ring widths (beyond that the glow is < 2e-4),
+        // not the final radius from birth. The shader applies the same factor.
+        const rt = e * 0.96 + 0.02;
+        const reach = rt + RING_REACH * (0.014 + 0.03 * rt);
+        const Q = R * (reach < 1 ? reach : 1);
+        S[0] = pulse[o] - vx; S[1] = pulse[o + 1] - vy; S[2] = Q; S[3] = Q; S[4] = 1; S[5] = 0;
+        S[6] = SHAPE.RING; S[7] = rt; S[8] = pulse[o + 5]; S[9] = pulse[o + 6];
         S[10] = pulse[o + 7]; S[11] = fadeK;
         commitSprite();
       }
@@ -271,6 +341,9 @@ export function createFx() {
       gl.uniform3f(u.uAcc, accent[0], accent[1], accent[2]);
       gl.uniform1f(u.uTime, time % 3600);
       gl.uniform1f(u.uGlowTop, FRONT_GLOW_ABOVE - 40);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, noiseTex);
+      gl.uniform1i(u.uNoise, 0);
       gl.enable(gl.BLEND);
       gl.blendFunc(gfx.src, gl.ONE_MINUS_SRC_ALPHA);
       gl.bindVertexArray(gfx.emptyVao);

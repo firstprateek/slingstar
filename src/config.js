@@ -101,9 +101,17 @@ export const CONFIG = Object.freeze({
   BLACKHOLE_SLINGSHOT_POINTS: 250,
   /** Multiplicative speed boost on surviving a pass through the influence zone. */
   BLACKHOLE_SPEED_BOOST: 1.12,
-  BINARY_SEPARATION_MIN: 340,
-  BINARY_SEPARATION_MAX: 440,
-  BINARY_ANGULAR_SPEED: 0.35,
+  /** Centre-to-centre distance of a binary pair's members. Phase 4: 340–440 → 440–520 with real
+   * pairs (see BINARY_MAX_WAIT_S): a farther partner hides the next planet for less of the turn. */
+  BINARY_SEPARATION_MIN: 440,
+  BINARY_SEPARATION_MAX: 520,
+  /** rad/s. Phase 4: 0.35 → 1.2 with real pairs. From one member, the partner swings through the
+   * line to the next planet once a turn and hides it (a partner eclipse) for ~40–70° of the turn:
+   * at 0.35 rad/s a 2–3.5 s dark spell, at 1.2 about a second. */
+  BINARY_ANGULAR_SPEED: 1.2,
+  /** Longest partner eclipse the generator allows from a binary member, s (generator.js
+   * eclipseMaxRun; with 36 sampled phases at 1.2 rad/s: at most 6 blocked phases, under 70° ≈ 1.02 s). */
+  BINARY_MAX_WAIT_S: 1.05,
 
   // ---------------------------------------------------------------- Phase 3 stream SIM: hazard generation
   // (append-only block owned by the sim stream; rates are per path planet unless noted)
@@ -126,15 +134,17 @@ export const CONFIG = Object.freeze({
   HAZARD_RATE_MAX: 0.55,
   /** After this many failed tries a hazardous path placement is re-rolled as a plain planet. */
   HAZARD_PLAIN_AFTER_TRIES: 12,
-  /** Binary members are small so both rings fit the separation with BODY_GAP. */
-  BINARY_R_MAX: 85,
+  /** Binary members are small so both rings fit the separation with BODY_GAP. Phase 4: 85 → 70 (a
+   * smaller partner hides the next planet for less of the turn). */
+  BINARY_R_MAX: 70,
   /** Black-hole centres stay inside this x range; placement tries per segment. */
   BLACKHOLE_X_MIN: 70,
   BLACKHOLE_X_MAX: 930,
   BLACKHOLE_TRIES: 24,
   /** A rolled black hole with no room beside its segment carries to the next ones (at most this many pending). */
   BLACKHOLE_CARRY: 2,
-  /** A pass pays the slingshot only if it got this deep (fraction of the influence radius). */
+  /** A pass this deep (closest approach as a fraction of the influence radius) or deeper pays the
+   * full slingshot; any shallower survived pass pays less (BLACKHOLE_SLINGSHOT_MIN_SCALE, Phase 4). */
   BLACKHOLE_SLINGSHOT_DEPTH: 0.8,
   /** Solvability on a planet with moons measures the window on the orbit band that starts this far
    * (comet surface to moon surface) above the moons, or SOLVE_CLEARANCE (comet centre) if larger. */
@@ -148,6 +158,32 @@ export const CONFIG = Object.freeze({
    * it) until the comet is this far outside its ring. */
   LEFT_RING_CLEAR: 40,
   // ---------------------------------------------------------------- end stream SIM block
+
+  // ---------------------------------------------------------------- sim rules (Phase 4)
+  /** The aim line lights a ring the comet enters at least this long after a release (a human
+   * re-press, finger up then down, takes ~120-150 ms: pressed before the entry, the armed hold
+   * latches at the ring edge). A ring it enters sooner, or is already inside, lights only if the
+   * comet stays inside it, above the safe latch floor, until AIM_SAFE_PRESS_S after the release. */
+  AIM_MIN_ENTRY_S: 0.15,
+  AIM_SAFE_PRESS_S: 0.25,
+  /** Lowest safe latch: altitude above the planet surface (the graze band, so an orbit has time). */
+  AIM_LATCH_FLOOR: 45,
+  /** Safe latch radius clears the outer edge of the planet's moon lane by this (comet surface to moon surface). */
+  AIM_LATCH_MOON_GAP: 20,
+  /** world.aim.points capacity (vertices). The drawn line is AIM_LINE_LENGTH of flight; through a
+   * black hole's influence it gets one vertex per sim step (>= 600 / (700 u/s × STEP) + 2 = 105). */
+  AIM_PATH_MAX_POINTS: 128,
+  /** The aim forecast follows the bent flight through at most this many influence passes and this
+   * many fixed steps of bent (stepped) flight in total; beyond either it does not light. */
+  AIM_MAX_BENDS: 3,
+  AIM_BEND_MAX_STEPS: 1024,
+  /** A bent aim path that comes nearer than this (comet surface to core surface) to a black hole's
+   * core does not light: a release a few ms off a razor-thin pass would die. */
+  AIM_CORE_CLEARANCE: 30,
+  /** A pass that only skims the influence edge pays this fraction of the slingshot points and
+   * boost; the fraction rises linearly to 1 at BLACKHOLE_SLINGSHOT_DEPTH × influence and deeper. */
+  BLACKHOLE_SLINGSHOT_MIN_SCALE: 0.4,
+  // ---------------------------------------------------------------- end sim rules (Phase 4)
 
   // ---------------------------------------------------------------- generation
   MAX_BODIES: 64,
@@ -188,6 +224,25 @@ export const CONFIG = Object.freeze({
   HOME_Y: 0,
   HOME_R: 90,
 
+  // ---------------------------------------------------------------- generator (Phase 4)
+  /** Generation work per world.step, in generator work units (about one ray-obstacle test each).
+   * Placement is a resumable job; the budget is counted in work, not time, so it stays deterministic. */
+  GEN_STEP_BUDGET: 30000,
+  /** Catch-up: once the generated course ends less than GEN_CATCHUP_AHEAD above the comet, the
+   * step budget ramps up linearly to GEN_CATCHUP_MAX × at GEN_URGENT_AHEAD; below that the budget
+   * is lifted for the step (a safety net just above AIM_TARGET_RANGE and the visible height). */
+  GEN_CATCHUP_AHEAD: 3400,
+  GEN_CATCHUP_MAX: 4,
+  GEN_URGENT_AHEAD: 2500,
+  /** Solvability time rule: the release window must also last this long at the assumed speed
+   * (base speed × SOLVE_WINDOW_SPEED_FACTOR) on the orbit checked, besides the degree rule. */
+  SOLVE_WINDOW_MIN_S: 0.025,
+  SOLVE_WINDOW_SPEED_FACTOR: 1.3,
+  /** Placement keeps B near enough (spacing) that its ring spans this multiple of the required
+   * window from A, before obstacles; the exact scan then confirms it. */
+  SOLVE_WINDOW_SHAPE_MARGIN: 1.25,
+  // ---------------------------------------------------------------- end generator (Phase 4)
+
   // ---------------------------------------------------------------- scoring
   POINTS_CATCH: 100,
   POINTS_PERFECT: 150,
@@ -205,7 +260,11 @@ export const CONFIG = Object.freeze({
   CAMERA_MAX_ZOOM_OUT: 0.15,
   /** Orbits near a wall reach past it: the view slides sideways to keep the comet this far inside the screen. */
   CAMERA_EDGE_PAD: 90,
-  NEAR_MISS_DISTANCE: 25,
+  /** Near miss: free flight passing within this of a surface (comet centre to the surface of a
+   * planet, moon or black-hole core). Phase 4: 25 → 60. At 25 (below the generator's 30-unit ray
+   * clearance) it fired ~0.2/min for human-like play and never for the bot; at 60 it is ~1-2/min
+   * for human-like bots (mostly moons) and ~6/min for the perfect bot. */
+  NEAR_MISS_DISTANCE: 60,
   NEAR_MISS_TIMESCALE: 0.35,
   NEAR_MISS_DURATION: 0.25,
   /** After NEAR_MISS_DURATION of real time at NEAR_MISS_TIMESCALE, ease back to 1× over this long (real s). */
@@ -217,7 +276,6 @@ export const CONFIG = Object.freeze({
   DEATH_PARTICLES: 2500,
   /** Reduced motion: slow-motion strength is scaled toward 1 by this factor. */
   REDUCED_MOTION_SLOWMO: 0.5,
-  CATCH_SHAKE: 6,
   RESTART_MAX_MS: 300,
   /** ?autoplay=1: the bot restarts this long (real s) after the game-over card appears. */
   AUTOPLAY_RESTART_S: 1.6,
@@ -252,7 +310,6 @@ export const CONFIG = Object.freeze({
   PARTICLE_SIZE_MIN_PX: 3,
   PARTICLE_SIZE_MAX_PX: 10,
   NEBULA_TEXTURE_SIZE: 512,
-  ZONE_CROSSFADE_S: 1.5,
 
   // ---------------------------------------------------------------- audio
   BPM: 108,
@@ -267,6 +324,20 @@ export const CONFIG = Object.freeze({
   DEATH_MUSIC_DUCK: 0.6,
   AUDIO_MOTE_VOICES: 4,
   AUDIO_SFX_VOICES: 14,
+
+  // ---------------------------------------------------------------- render (Phase 4)
+  /** Nebula / wall / accent cross-fade on a zone change (s). Every palette's nebula is pre-baked,
+   * so the fade starts on the zone-change frame and finishes while the zone banner is showing. */
+  NEBULA_CROSSFADE_S: 0.55,
+  /** Peak catch shake in CSS px (the renderer converts to world units). */
+  CATCH_SHAKE_PX: 5,
+  /** Peak shake on a perfect catch, CSS px. */
+  PERFECT_SHAKE_PX: 8,
+  /** Longest a streaked particle may stretch along its velocity (× its diameter). */
+  PARTICLE_STRETCH_MAX: 3,
+  /** The death burst is spawned over this many frames (back-dated births) to spread the JS cost. */
+  DEATH_SPAWN_FRAMES: 4,
+  // ---------------------------------------------------------------- end render (Phase 4)
 });
 
 /**

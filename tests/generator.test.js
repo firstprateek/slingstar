@@ -1,9 +1,14 @@
 // Generator (PLAN.md §2.6, §8): for 200 seeds × 60 path planets, every consecutive path pair passes
 // the solvability rule, measured once every body that could affect the pair exists.
+// Phase 4 (real binary pairs): from a member of a binary pair, its partner swings through the line
+// to the next planet once a turn and hides it for part of the turn, whatever the next planet's
+// placement. For a binary A the rule is therefore "a window at every sampled phase except during a
+// partner eclipse, and every eclipse passes within BINARY_MAX_WAIT_S" (generator.js eclipseMaxRun):
+// releaseWindowDeg leaves those phases out, and this test also asserts the eclipse bound.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createWorld } from '../src/sim/world.js';
-import { createGenerator, releaseWindowDeg } from '../src/sim/generator.js';
+import { createGenerator, releaseWindowDeg, releaseWaitSeconds } from '../src/sim/generator.js';
 import { solveWindowDeg, zoneOfPathIndex, captureBand } from '../src/sim/scoring.js';
 import { CONFIG } from '../src/config.js';
 import { BODY, BODY_FLAG } from '../src/contracts.js';
@@ -36,7 +41,7 @@ function generate(seed, onPair) {
 }
 
 test(`solvability: ${SEEDS} seeds × ${PATH} path planets, every consecutive pair has its window (hazard zones included)`, (t) => {
-  let pairs = 0, minMargin = Infinity, worst = '', rerolls = 0, fallbacks = 0;
+  let pairs = 0, minMargin = Infinity, worst = '', rerolls = 0, fallbacks = 0, binaryA = 0, longestWait = 0;
   // Pairs whose check really involved each hazard (zones 1–6 are all inside 60 path planets).
   const withHazard = { moonOnA: 0, moonOnB: 0, drifting: 0, binary: 0, blackHoleBeside: 0 };
   for (let seed = 1; seed <= SEEDS; seed++) {
@@ -47,6 +52,12 @@ test(`solvability: ${SEEDS} seeds × ${PATH} path planets, every consecutive pai
       assert.ok(win >= req, `seed ${seed} pair ${k - 1}→${k}: window ${win}° < ${req}°`);
       pairs++;
       const bd = w.bodies;
+      if (bd.flags[a] & BODY_FLAG.BINARY) {
+        const wait = releaseWaitSeconds(w, a, b);
+        assert.ok(wait <= CONFIG.BINARY_MAX_WAIT_S + 1e-9, `seed ${seed} pair ${k - 1}→${k}: partner eclipse ${wait.toFixed(2)} s`);
+        longestWait = Math.max(longestWait, wait);
+        binaryA++;
+      }
       let moonA = false, moonB = false, bh = false;
       const ylo = Math.min(bd.y[a], bd.y[b]) - 400, yhi = Math.max(bd.y[a], bd.y[b]) + 400;
       for (let i = 0; i < bd.count; i++) {
@@ -64,8 +75,10 @@ test(`solvability: ${SEEDS} seeds × ${PATH} path planets, every consecutive pai
     rerolls += gen.rerolls; fallbacks += gen.fallbacks;
   }
   t.diagnostic(`${pairs} pairs checked; tightest: ${worst}; re-rolls ${rerolls}, fallbacks ${fallbacks}; ` +
-    `pairs with hazards ${JSON.stringify(withHazard)}`);
+    `pairs with hazards ${JSON.stringify(withHazard)}; ${binaryA} from a binary, longest partner eclipse ${longestWait.toFixed(2)} s`);
   assert.equal(pairs, SEEDS * PATH);
+  // Fallbacks (the plain safe placement after SOLVE_MAX_TRIES failed tries) stay rare.
+  assert.ok(fallbacks <= pairs / 500, `${fallbacks} fallbacks in ${pairs} placements`);
   for (const [k, n] of Object.entries(withHazard)) assert.ok(n >= SEEDS, `only ${n} pairs with ${k}`);
 });
 

@@ -256,11 +256,61 @@ try {
     await sleep(500);
     const kept2 = await pr.evaluate(() => ({ screen: window.__slingstar.screen, state: window.__slingstar.world.comet.state, body: window.__slingstar.world.comet.bodyId }));
     check('hide → Tap to resume keeps the comet orbiting', hidScreen === 'resume' && kept2.screen === 'playing' && kept2.state === 0 && kept2.body === bodyBefore, JSON.stringify({ hidScreen, ...kept2 }));
+    // WebGL context lost mid-orbit (iOS memory pressure) → the run stops behind "Tap to resume";
+    // after the context comes back, resuming keeps the orbit.
+    const lost = await pr.evaluate(async () => {
+      const h = window.__slingstar;
+      const ext = document.getElementById('game').getContext('webgl2').getExtension('WEBGL_lose_context');
+      if (!ext) return { ext: false };
+      window.__loseExt = ext;
+      ext.loseContext();
+      await new Promise((r) => setTimeout(r, 300));
+      const steps0 = h.world.steps;
+      await new Promise((r) => setTimeout(r, 500));
+      const r = { ext: true, screen: h.screen, simAdvanced: h.world.steps - steps0 };
+      ext.restoreContext();
+      await new Promise((res) => setTimeout(res, 600));
+      return r;
+    });
+    await pr.touchscreen.tap(195, 420);
+    await sleep(500);
+    const kept3 = await pr.evaluate(() => ({ screen: window.__slingstar.screen, state: window.__slingstar.world.comet.state, body: window.__slingstar.world.comet.bodyId, draws: window.__slingstar.stats.drawCalls }));
+    check('context loss while playing → Tap to resume, sim stopped, orbit kept', lost.ext && lost.screen === 'resume' && lost.simAdvanced === 0
+      && kept3.screen === 'playing' && kept3.state === 0 && kept3.body === bodyBefore && kept3.draws > 0, JSON.stringify({ ...lost, ...kept3 }));
     await pr.touchscreen.tap(195, 600);
     await sleep(150);
     const flung = await pr.evaluate(() => window.__slingstar.world.comet.state);
     check('after resume, the next real tap flings', flung === 1, `state=${flung}`);
     await pr.close();
+
+    // ------------------------------------------------------------ 4b. sound off → no running AudioContext
+    {
+      const sp = await context.newPage(); watch(sp, 'sound');
+      await sp.goto(`${base}?seed=7`);
+      await sp.waitForFunction(() => window.__slingstar && window.__slingstar.frames > 30, null, { timeout: 15000 });
+      const centre = async (sel) => { const r = await sp.locator(sel).boundingBox(); return [r.x + r.width / 2, r.y + r.height / 2]; };
+      const [sx, sy] = await centre('.s-title .sound-btn');
+      const [cx, cy] = await centre('.s-title .chip.sel');   // re-picking the current mode: a gesture that changes nothing
+      const state = () => sp.evaluate(() => window.__slingstar.audioState);
+      await sp.touchscreen.tap(cx, cy); await sleep(300);
+      const on1 = await state();                                // first gesture unlocks audio (sound on)
+      await sp.touchscreen.tap(sx, sy); await sleep(600);
+      const off1 = await state();                               // sound off: suspended after the fade
+      await sp.touchscreen.tap(cx, cy); await sleep(300);
+      const off2 = await state();                               // later gestures must not resume it
+      await sp.touchscreen.tap(sx, sy); await sleep(400);
+      const on2 = await state();                                // sound on again, resumed inside the tap
+      await sp.touchscreen.tap(sx, sy); await sleep(300);      // off again (persisted)
+      await sp.reload();
+      await sp.waitForFunction(() => window.__slingstar && window.__slingstar.frames > 30, null, { timeout: 15000 });
+      await sp.touchscreen.tap(cx, cy); await sleep(300);
+      const offBoot = await state();                            // booted with sound off: no context at all
+      check('sound off → AudioContext not running; on again resumes it in the tap',
+        on1 === 'running' && off1 !== 'running' && off2 !== 'running' && on2 === 'running' && offBoot === 'none',
+        JSON.stringify({ on1, off1, off2, on2, offBoot }));
+      await sp.touchscreen.tap(sx, sy); await sleep(200);      // leave the shared storage with sound on
+      await sp.close();
+    }
 
     // ------------------------------------------------------------ 5. late zones (hazards), sim at 4×
     const zp = await context.newPage(); watch(zp, 'zone4');

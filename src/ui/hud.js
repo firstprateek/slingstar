@@ -4,7 +4,7 @@
  * combo pop, PERFECT / SLINGSHOT flashes and the first-run prompt. Owned by stream D.
  *
  * Every DOM node is created once in createHud. update() runs every frame but touches the DOM only
- * when a displayed value changes, and never allocates: digits are written as interned
+ * when a displayed value changes (the score at most ~12 times a second), and never allocates: digits are written as interned
  * single-character strings (numtext.js), other labels are precomputed. Animations restart by
  * swapping between two identical CSS classes, so no forced layout is needed.
  */
@@ -21,6 +21,12 @@ const TIER_CSS = Object.freeze(['#fff'].concat(CONFIG.TIER_COLORS.map((c) => {
 const ZONE_LABELS = Object.freeze(Array.from({ length: 100 }, (_, i) => `ZONE ${i}`));
 /** Scores from here on (7+ digits) use a smaller font so they never reach the side badges. */
 const LONG_SCORE = 1000000;
+/**
+ * Minimum time between score repaints (~12 Hz). Height scoring changes the score on nearly every
+ * frame, and each repaint redraws the score's blurred glow at device resolution. Catches, death
+ * and a new run still show the exact value at once.
+ */
+const SCORE_INTERVAL_MS = 80;
 /** Combo is shown from this value up (a "combo" of 1 is just a catch). */
 const COMBO_SHOW_MIN = 2;
 
@@ -86,6 +92,10 @@ export function createHud(root) {
   const zoneBanner = new Retrigger(zone, 'on');
 
   let longScore = false;
+  /** Score shown in the DOM, when it was written (performance.now ms), and "write the next change at once". */
+  let shownScore = 0;
+  let scoreAt = -1e9;
+  let scoreNow = false;
   let lastMult = 1;
   let lastCombo = 0;
   let comboVisible = false;
@@ -126,16 +136,25 @@ export function createHud(root) {
   return {
     update(world) {
       const s = world.score;
-      score.set(s.score);
-      const long = s.score >= LONG_SCORE;
-      if (long !== longScore) { longScore = long; scoreEl.classList.toggle('long', long); }
+      if (s.score !== shownScore) {
+        const now = performance.now();
+        if (scoreNow || world.dead || now - scoreAt >= SCORE_INTERVAL_MS) {
+          shownScore = s.score;
+          scoreAt = now;
+          scoreNow = false;
+          score.set(shownScore);
+          const long = shownScore >= LONG_SCORE;
+          if (long !== longScore) { longScore = long; scoreEl.classList.toggle('long', long); }
+        }
+      }
       setMult(s.multiplier);
       setCombo(s.combo);
     },
     onEvent(type, _x, _y, a, _b) {
       if (type === EV.ZONE_CHANGE) showZone(a);
       else if (type === EV.COMBO_UP) { setCombo(a); if (a >= COMBO_SHOW_MIN) comboPop.fire(); }
-      else if (type === EV.PERFECT) perfectFlash.fire();
+      else if (type === EV.PERFECT) { perfectFlash.fire(); scoreNow = true; }
+      else if (type === EV.LATCH) scoreNow = true;
       else if (type === EV.SLINGSHOT) slingFlash.fire();
     },
     prompt(text) {
@@ -155,6 +174,7 @@ export function createHud(root) {
     },
     resetRun() {
       score.set(0);
+      shownScore = 0; scoreAt = -1e9; scoreNow = false;
       if (longScore) { longScore = false; scoreEl.classList.remove('long'); }
       lastMult = 0; setMult(1);
       lastCombo = -1; setCombo(0);

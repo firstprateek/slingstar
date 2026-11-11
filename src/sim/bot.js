@@ -2,7 +2,11 @@
 /**
  * Fairness bot (PLAN.md §8): holds while in rings, releases when the aim ray is clear onto the next
  * path planet. Pure, allocation-free, reads only world state (no lookahead simulation beyond the
- * aim line the player also sees). Used by tests, ?autoplay=1 and the title screen. Owned by stream A.
+ * aim line the player also sees). Through a black hole's influence that line is the exact bent
+ * flight (Phase 4), so the bot also takes lit slingshots. Binary pairs need nothing special: both
+ * members carry the next path index, and from a member the line looks past its partner's ring (a
+ * press there after a lit release arms for the lit ring). Used by tests, ?autoplay=1 and the title
+ * screen. Owned by stream A.
  *
  * Usage: each step, `held = bot.decide(world)`; turn it into a SimInput (pressed/released edges
  * from the previous held value) and call world.step. Call `bot.reset()` with world.reset().

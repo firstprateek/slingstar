@@ -10,9 +10,10 @@
  *   per frame → audio.update(world, dtReal);
  *   screens → audio.setScene(SCREEN.*); new run → audio.resetRun();
  *   page hidden → audio.suspend(); back + gesture → audio.resume();
- *   sound toggle → audio.setEnabled(on).
+ *   sound toggle → audio.setEnabled(on); audio.unlock();   (in that order, inside the tap)
  *
- * Nothing is scheduled or synthesised before unlock or while disabled / hidden.
+ * Nothing is scheduled or synthesised before unlock or while disabled / hidden. While sound is off
+ * the AudioContext is never created, and an existing one is suspended (after a short fade).
  */
 import { CONFIG } from '../config.js';
 import { BODY, COMET, EV, SCREEN } from '../contracts.js';
@@ -114,6 +115,20 @@ export function createCore(ctx, masterLevel = MASTER_LEVEL) {
 /** @param {any} _e */
 function ignore(_e) {}
 
+/** Sound off: wait for the master fade (time constant 0.03 s) before suspending the context. */
+const OFF_SUSPEND_MS = 200;
+
+/**
+ * Safari 16.4+: an "ambient" audio session mixes with other apps' audio (music keeps playing)
+ * instead of interrupting it, and follows the silent switch. Must be set before audio starts.
+ */
+function setAmbientSession() {
+  try {
+    const s = /** @type {any} */ (navigator).audioSession;
+    if (s && s.type !== 'ambient') s.type = 'ambient';
+  } catch (_e) { /* unsupported */ }
+}
+
 /**
  * @typedef {import('../contracts.js').Audio & {
  *   context: AudioContext | null,
@@ -138,6 +153,8 @@ export function createAudio(opts) {
   /** @type {string} */
   let scene = SCREEN.TITLE;
   let deathClosed = false;
+  /** Pending "sound turned off → suspend the context" timer. */
+  let offTimer = 0;
 
   /** @type {AudioEngine} */
   const api = {
@@ -147,29 +164,36 @@ export function createAudio(opts) {
     get core() { return core; },
 
     unlock() {
+      hidden = false;
+      // Sound off: never create or resume the context. A running (even silent) AudioContext can
+      // pause or duck other apps' music on iPhone. setEnabled(true) + unlock() in the toggle's tap
+      // brings it up.
+      if (!api.enabled) return;
       if (!ctx) {
         const w = /** @type {any} */ (window);
         const C = w.AudioContext || w.webkitAudioContext;
         if (!C) return;
+        setAmbientSession();
         try { ctx = new C({ latencyHint: 'interactive' }); } catch (_e) { ctx = new C(); }
       }
       if (!ctx) return;
       if (!core) {
-        core = createCore(ctx, api.enabled ? MASTER_LEVEL : 0);
+        core = createCore(ctx, MASTER_LEVEL);
         // iOS: starting any source inside the gesture fully unlocks output on older WebKit.
         const b = ctx.createBuffer(1, 1, ctx.sampleRate);
         const s = ctx.createBufferSource();
         s.buffer = b; s.connect(ctx.destination); s.start(0);
         core.music.setScene(scene, ctx.currentTime);
       }
+      cancelOffSuspend();
       const st = /** @type {string} */ (ctx.state);
       if (st === 'suspended' || st === 'interrupted') ctx.resume().catch(ignore);
-      hidden = false;
       startScheduler();
     },
 
     suspend() {
       hidden = true;
+      cancelOffSuspend();
       stopScheduler();
       if (core && ctx) { core.sfx.graze(false, ctx.currentTime); core.sfx.well(0, ctx.currentTime); }
       if (ctx && ctx.state === 'running') ctx.suspend().catch(ignore);
@@ -177,7 +201,8 @@ export function createAudio(opts) {
 
     resume() {
       hidden = false;
-      if (!ctx) return;
+      if (!ctx || !api.enabled) return;
+      cancelOffSuspend();
       const st = /** @type {string} */ (ctx.state);
       if (st === 'suspended' || st === 'interrupted') ctx.resume().catch(ignore);
       startScheduler();
@@ -188,8 +213,19 @@ export function createAudio(opts) {
       if (!ctx || !core) return;
       const t = ctx.currentTime;
       core.graph.master.gain.setTargetAtTime(on ? MASTER_LEVEL : 0, t, on ? 0.08 : 0.03);
-      if (on) startScheduler();
-      else { stopScheduler(); core.sfx.graze(false, t); core.sfx.well(0, t); }
+      if (on) {
+        // Called from the sound toggle's tap: resuming here is inside the gesture.
+        cancelOffSuspend();
+        const st = /** @type {string} */ (ctx.state);
+        if (!hidden && (st === 'suspended' || st === 'interrupted')) ctx.resume().catch(ignore);
+        startScheduler();
+      } else {
+        stopScheduler();
+        core.sfx.graze(false, t); core.sfx.well(0, t);
+        // Let the master fade out, then stop the context so nothing runs while sound is off.
+        cancelOffSuspend();
+        offTimer = /** @type {any} */ (setTimeout(suspendIfOff, OFF_SUSPEND_MS));
+      }
     },
 
     onEvent(type, x, y, a, b) {
@@ -245,6 +281,15 @@ export function createAudio(opts) {
       core.sfx.graze(on, ctx.currentTime);
     },
   };
+
+  function suspendIfOff() {
+    offTimer = 0;
+    if (!api.enabled && ctx && ctx.state === 'running') ctx.suspend().catch(ignore);
+  }
+
+  function cancelOffSuspend() {
+    if (offTimer) { clearTimeout(offTimer); offTimer = 0; }
+  }
 
   function tick() {
     if (!ctx || !core) return;

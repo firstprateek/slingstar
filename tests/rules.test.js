@@ -2,10 +2,10 @@
 // bounce, combo resets, collapse front, pre-start, aim line and assist, near miss, motes, zones.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createWorld } from '../src/sim/world.js';
+import { createWorld, castRay } from '../src/sim/world.js';
 import { CONFIG, STEP } from '../src/config.js';
 import { BODY, COMET, EV, COMBO_BREAK_REASON, DEATH_CAUSE } from '../src/contracts.js';
-import { emptyWorld, addPlanet, setFree, driver, ofType } from './helpers.js';
+import { emptyWorld, addPlanet, setFree, driver, ofType, addMoon } from './helpers.js';
 
 const DEG = Math.PI / 180;
 const near = (a, b, eps, msg) => assert.ok(Math.abs(a - b) <= eps, `${msg ?? ''} expected ${b} ± ${eps}, got ${a}`);
@@ -320,6 +320,10 @@ test('catching path planet 10 enters zone 2: ZONE_CHANGE, base speed rises', () 
   assert.equal(w.score.pathReached, 10);
   assert.equal(w.baseSpeed, CONFIG.BASE_SPEED_START + CONFIG.BASE_SPEED_PER_ZONE);
   assert.ok(w.comet.speed >= w.baseSpeed);
+  // Phase 4: the velocity follows the raised speed on the catch step itself, so the aim direction
+  // (velocity / speed) is a unit vector and a release on the next step flies at the stated speed.
+  near(Math.hypot(w.comet.vx, w.comet.vy), w.comet.speed, 1e-9, '|v| = speed');
+  near(Math.hypot(w.aim.dx, w.aim.dy), 1, 1e-12, 'unit aim direction');
 });
 
 // ------------------------------------------------------------------ collapse front
@@ -337,13 +341,22 @@ test('the collapse front catches a comet that falls behind it', () => {
   assert.equal(w.comet.state, COMET.DEAD);
 });
 
-test('front: starts 1500 below and still before the run, 220 u/s + 4 u/s², capped at 75% base, ≤ 2600 behind', () => {
+// Phase 4: PLAN §2.2 says the front starts 1500 under the COMET (it used to start 1500 under the home
+// planet's centre, 1310 under the comet); it is re-anchored there at the first release.
+test('front: starts 1500 below the comet and still before the run, 220 u/s + 4 u/s², capped at 75% base, ≤ 2600 behind', () => {
   const w = createWorld({ seed: 7 });
   const d = driver(w);
-  assert.equal(w.front.y, CONFIG.HOME_Y - CONFIG.FRONT_START_BELOW);
+  assert.equal(w.front.y, w.comet.y - CONFIG.FRONT_START_BELOW);
+  const f0 = w.front.y;
   d.run(false, 240);
   assert.equal(w.started, false);
-  assert.equal(w.front.y, CONFIG.HOME_Y - CONFIG.FRONT_START_BELOW);
+  assert.equal(w.front.y, f0);
+  d.step(true);
+  let ev = [];
+  for (let k = 0; k < 600 && !ofType(ev, EV.RELEASE).length; k++) ev = d.step(false);
+  const rel = ofType(ev, EV.RELEASE);
+  assert.equal(rel.length, 1);
+  near(w.front.y, rel[0].y - CONFIG.FRONT_START_BELOW + CONFIG.FRONT_SPEED_START * STEP, 0.01, 'front 1500 under the comet at the start');
 
   const e = emptyWorld();
   addPlanet(e, 500, 3000, 80, 250);
@@ -369,6 +382,9 @@ test('front: starts 1500 below and still before the run, 220 u/s + 4 u/s², capp
 
 // ------------------------------------------------------------------ pre-start
 
+// Phase 4 (PLAN §2.7, "the first act is a safe release"): a release before the start used to let go
+// at once in any direction (~35% of random first releases died); now it lets go only on a lit line,
+// waiting for the line to light if need be.
 test('pre-start: home orbit holds without decay or speed gain until the first release', () => {
   const w = createWorld({ seed: 3 });
   const d = driver(w);
@@ -382,12 +398,54 @@ test('pre-start: home orbit holds without decay or speed gain until the first re
   assert.equal(w.comet.speed, s0);
   assert.equal(w.front.y, f0);
   assert.equal(w.score.score, 0);
-  const ev = d.step(false);
+  for (let k = 0; k < 400 && !w.aim.clear; k++) d.step(true);
+  assert.equal(w.aim.clear, true);
+  const ev = d.step(false); // released on a lit line: lets go at once
   assert.equal(ofType(ev, EV.RELEASE).length, 1);
   assert.equal(w.started, true);
   assert.equal(w.comet.state, COMET.FREE);
   d.run(false, 60);
-  assert.ok(w.front.y > f0, 'front moves once started');
+  assert.ok(w.front.y > f0 - 400, 'front moves once started');
+});
+
+test('pre-start: a release on a dark aim line waits for the line to light, then flies along it to the lit planet', () => {
+  for (const seed of [3, 11, 20260101]) {
+    const w = createWorld({ seed });
+    const d = driver(w);
+    d.step(true);
+    for (let k = 0; k < 400 && w.aim.clear; k++) d.step(true);
+    assert.equal(w.aim.clear, false);
+    let ev = d.step(false);
+    assert.equal(ofType(ev, EV.RELEASE).length, 0, 'a release on a dark line is queued');
+    assert.equal(w.started, false);
+    assert.equal(w.comet.state, COMET.ORBIT);
+    let lit = null, waited = 0;
+    while (!ofType(ev, EV.RELEASE).length && waited++ < 400) {
+      lit = { clear: w.aim.clear, dx: w.aim.dx, dy: w.aim.dy, target: w.aim.target };
+      ev = d.step(false);
+    }
+    const rel = ofType(ev, EV.RELEASE);
+    assert.equal(rel.length, 1, `seed ${seed}: released within a lap`);
+    assert.equal(lit.clear, true, 'it lets go on a lit line');
+    near(rel[0].b, Math.atan2(lit.dy, lit.dx), 1e-12, 'exactly along the lit line');
+    assert.ok(lit.dy > 0, 'heading up the field');
+    assert.ok(w.bodies.pathIndex[lit.target] >= 1, 'onto a path planet');
+    for (let k = 0; k < 600 && w.comet.state === COMET.FREE; k++) d.step(true);
+    assert.equal(w.comet.state, COMET.ORBIT, `seed ${seed}: an armed hold catches it`);
+    assert.equal(w.comet.body, lit.target);
+  }
+});
+
+test('pre-start: holding again cancels a queued release', () => {
+  const w = createWorld({ seed: 3 });
+  const d = driver(w);
+  d.step(true);
+  for (let k = 0; k < 400 && w.aim.clear; k++) d.step(true);
+  d.step(false); // queued
+  const ev = d.run(true, 480); // held for over two laps: the line lights, but the finger is down
+  assert.equal(ofType(ev, EV.RELEASE).length, 0);
+  assert.equal(w.started, false);
+  assert.equal(w.comet.state, COMET.ORBIT);
 });
 
 // ------------------------------------------------------------------ release & aim
@@ -405,11 +463,15 @@ function predictNextTangent(w) {
   return { x, y, dx: -Math.sin(ang) * c.orbitDir, dy: Math.cos(ang) * c.orbitDir };
 }
 
-/** Add a planet at distance D whose ring the ray from (x,y) along (dx,dy) misses by `missDeg`. */
+/**
+ * Add a planet at distance D whose ring the ray from (x,y) along (dx,dy) misses by `missDeg`.
+ * It is path planet 1 (Phase 4: before the start, the home orbit lets go only on a line lit onto a
+ * path planet).
+ */
 function planetMissing(w, t, D, rc, missDeg) {
   const half = Math.asin(rc / D);
   const a = Math.atan2(t.dy, t.dx) + half + missDeg * DEG;
-  return addPlanet(w, t.x + Math.cos(a) * D, t.y + Math.sin(a) * D, 60, rc);
+  return addPlanet(w, t.x + Math.cos(a) * D, t.y + Math.sin(a) * D, 60, rc, 1);
 }
 
 test('aim line: lights the planet whose ring the tangent enters cleanly; a body in the way blocks it', () => {
@@ -459,6 +521,29 @@ test('aim assist rotates up to 3° toward a ring the tangent just misses, and re
   driver(w2).step(true);
   near(w2.aim.dx * t2.dx + w2.aim.dy * t2.dy, 1, 1e-12, 'no assist beyond 3°');
   assert.equal(w2.aim.clear, false);
+});
+
+// Phase 4: the aim line used to light a ring the comet was already inside (even heading out of it)
+// or entered a few ms after the release, too soon for a human to press before it; latching late
+// put the comet deep in the band or in a moon lane.
+test('aim line: lights a ring only if a human-timed press catches it safely', () => {
+  const sp = 800, minS = CONFIG.AIM_MIN_ENTRY_S * sp;
+  const w = emptyWorld();
+  const p = addPlanet(w, 500, 3000, 80, 250);
+  // Inside the ring, heading out of it: never lit.
+  assert.equal(castRay(w, 500, 3000 - 240, 0, -1, sp, 0, -1), -1, 'inside, leaving');
+  // Entering soon after the release and heading deep: a re-press would latch below the safe floor.
+  assert.equal(castRay(w, 500, 3000 - 250 - 0.4 * minS, 0, 1, sp, 0, -1), -1, 'entry too soon, deep chord');
+  // Entering AIM_MIN_ENTRY_S or more after the release: lit (a re-press arms the hold in time).
+  assert.equal(castRay(w, 500, 3000 - 250 - minS - 1, 0, 1, sp, 0, -1), p, 'entry late enough');
+  // Already inside, on a chord that stays in the safe band through AIM_SAFE_PRESS_S: lit.
+  assert.equal(castRay(w, 700, 2900, 0, 1, sp, 0, -1), p, 'inside, shallow chord');
+  // ... unless that chord passes the moon lane.
+  const w2 = emptyWorld();
+  const p2 = addPlanet(w2, 500, 3000, 80, 250);
+  addMoon(w2, p2, 175, 1, Math.PI, 18);
+  assert.equal(castRay(w2, 700, 2900, 0, 1, sp, 0, -1), -1, 'inside, chord within the moon lane gap');
+  assert.equal(castRay(w2, 500, 3000 - 250 - minS - 1, 0, 1, sp, 0, -1), p2, 'normal entry still lit');
 });
 
 // ------------------------------------------------------------------ free flight

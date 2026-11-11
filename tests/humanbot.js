@@ -225,12 +225,12 @@ export function createHumanBot(seed, opts = {}) {
  * Play one level seed with the human-like bot until death or maxTime.
  * Returns run statistics, including how the first three flights went.
  */
-export function humanRun(seed, { maxTime = 300, player = seed, opts, stopAtPath = Infinity } = {}) {
+export function humanRun(seed, { maxTime = 300, player = seed, opts, stopAtPath = Infinity, onEvent } = {}) {
   const w = createWorld({ seed });
   const bot = createHumanBot(player, opts);
   const input = { held: false, pressedThisStep: false, releasedThisStep: false };
   let prev = false, cause = -1, flights = 0, directCatches = 0, firstThreeDirect = true, firstThreeDone = false;
-  let wantPath = 1, releaseTime = 0, startTime = -1, firstCatchTimes = [];
+  let wantPath = 1, releaseTime = 0, startTime = -1, firstCatchTimes = [], nearMisses = 0, slingshots = 0;
   while (!w.dead && w.time - Math.max(0, startTime) < maxTime && w.score.pathReached < stopAtPath) {
     if (w.time > 60 && startTime < 0) break; // never released (should not happen)
     const h = bot.decide(w);
@@ -239,6 +239,7 @@ export function humanRun(seed, { maxTime = 300, player = seed, opts, stopAtPath 
     const q = w.events;
     for (let i = 0; i < q.count; i++) {
       const t = q.type[i];
+      if (onEvent) onEvent(w, t, q.x[i], q.y[i], q.a[i], q.b[i]);
       if (t === EV.RELEASE) {
         if (startTime < 0) startTime = w.time;
         flights++; releaseTime = w.time;
@@ -253,6 +254,8 @@ export function humanRun(seed, { maxTime = 300, player = seed, opts, stopAtPath 
           if (flights === 3) firstThreeDone = true;
         }
       } else if (t === EV.DEATH) cause = q.a[i];
+      else if (t === EV.NEAR_MISS) nearMisses++;
+      else if (t === EV.SLINGSHOT) slingshots++;
     }
     if (w.dead && flights <= 3 && !firstThreeDone) firstThreeDirect = false;
     q.count = 0;
@@ -262,6 +265,6 @@ export function humanRun(seed, { maxTime = 300, player = seed, opts, stopAtPath 
     seed, dead: w.dead, cause, time: runTime, score: w.score.score, zone: w.score.zone,
     pathReached: w.score.pathReached, firstThree: w.score.pathReached >= 3 || (!w.dead && false),
     firstThreeDirect: firstThreeDirect && directCatches >= 3, catches: w.score.catches,
-    speed: w.comet.speed, baseSpeed: w.baseSpeed,
+    speed: w.comet.speed, baseSpeed: w.baseSpeed, nearMisses, slingshots,
   };
 }

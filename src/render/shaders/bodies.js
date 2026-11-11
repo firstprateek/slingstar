@@ -15,7 +15,18 @@ import { HEADER, HASH } from './common.js';
 /** Render-local instance types (planet/moon/black hole match BODY.*). */
 export const BTYPE = Object.freeze({ PLANET: 0, MOON: 1, BLACKHOLE: 2, ORBIT_PATH: 3, MOON_TRACE: 4, DRIFT_TRACK: 5 });
 
-export const BODIES_VS = `${HEADER}
+/**
+ * Per-instance planet palette (Phase 4): derived once per vertex (4× per instance) instead of per
+ * fragment, and handed to the fragment shader as flat varyings. Same maths as before.
+ */
+const PALETTE_GLSL = `
+uniform vec3 uPalA[5];
+uniform vec3 uPalB[5];
+uniform vec3 uPalC[5];
+vec3 hueOf(vec3 c) { float m = max(max(c.r, c.g), max(c.b, 1e-4)); return c / m; }
+`;
+
+export const BODIES_VS = `${HEADER}${HASH}${PALETTE_GLSL}
 in vec2 aCorner;
 in vec4 aA;     // rel x, rel y, r, rc   (world units, relative to the view centre)
 in vec4 aB;     // extent x, highlight, pulse, extent y (0 = square)
@@ -27,25 +38,51 @@ flat out vec4 vA;
 flat out vec4 vB;
 flat out vec4 vC;
 flat out uvec4 vI;
+flat out vec3 vC1;     // planet palette: c1, c2, c3, atmosphere (planets and drift tracks only)
+flat out vec3 vC2;
+flat out vec3 vC3;
+flat out vec3 vAtmo;
+
+vec3 hueShift(vec3 c, float a) {
+  const vec3 k = vec3(0.57735);
+  float ca = cos(a), sa = sin(a);
+  return max(c * ca + cross(k, c) * sa + k * dot(k, c) * (1.0 - ca), 0.0);
+}
+float rnd(uint seed, uint salt) { return u2f(pcg(seed ^ salt)); }
+
 void main() {
   vec2 local = aCorner * vec2(aB.x, aB.w > 0.0 ? aB.w : aB.x);
   vLocal = local;
   vA = aA; vB = aB; vC = aC; vI = aI;
+  vC1 = vec3(0.0); vC2 = vec3(0.0); vC3 = vec3(0.0); vAtmo = vec3(0.0);
+  if (aI.y == 0u || aI.y == 5u) {
+    uint seed = aI.x;
+    int pal = int(aI.w);
+    vec3 A = hueOf(uPalA[pal]), B = hueOf(uPalB[pal]), C = hueOf(uPalC[pal]);
+    float h1 = rnd(seed, 0x1234u), h2 = rnd(seed, 0x5678u), h3 = rnd(seed, 0x9abcu);
+    vec3 base = hueShift(mix(A, B, h1), (h2 - 0.5) * 1.3);
+    base = hueOf(base + 0.04);
+    vC1 = mix(base, vec3(1.0), 0.22) * 0.70;
+    vC2 = hueOf(hueShift(base, (h3 < 0.5 ? -1.0 : 1.0) * (0.35 + 0.5 * h3))) * 0.30;
+    vC3 = mix(mix(C, base, 0.35), vec3(1.0), 0.45) * 0.8;
+    vAtmo = hueOf(mix(C, base, 0.25 + 0.3 * h3));
+  }
   gl_Position = vec4((aA.xy + local) * uScale, 0.0, 1.0);
 }
 `;
 
-export const BODIES_FS = `${HEADER}${HASH}
+export const BODIES_FS = `${HEADER}${HASH}${PALETTE_GLSL}
 in vec2 vLocal;
 flat in vec4 vA;
 flat in vec4 vB;
 flat in vec4 vC;
 flat in uvec4 vI;
+flat in vec3 vC1;
+flat in vec3 vC2;
+flat in vec3 vC3;
+flat in vec3 vAtmo;
 out vec4 outColor;
 
-uniform vec3 uPalA[5];
-uniform vec3 uPalB[5];
-uniform vec3 uPalC[5];
 uniform vec3 uAccent;     // current zone accent (aim highlight)
 uniform float uTime;
 uniform float uUpp;       // world units per backing pixel
@@ -55,29 +92,11 @@ const vec2 LIGHT2 = vec2(-0.6277, 0.7784);
 
 vec4 over(vec4 top, vec4 bot) { return top + bot * (1.0 - top.a); }
 
-vec3 hueOf(vec3 c) { float m = max(max(c.r, c.g), max(c.b, 1e-4)); return c / m; }
-vec3 hueShift(vec3 c, float a) {
-  const vec3 k = vec3(0.57735);
-  float ca = cos(a), sa = sin(a);
-  return max(c * ca + cross(k, c) * sa + k * dot(k, c) * (1.0 - ca), 0.0);
-}
 float rnd(uint seed, uint salt) { return u2f(pcg(seed ^ salt)); }
 
-void planetPalette(uint seed, int pal, out vec3 c1, out vec3 c2, out vec3 c3, out vec3 atmo) {
-  vec3 A = hueOf(uPalA[pal]), B = hueOf(uPalB[pal]), C = hueOf(uPalC[pal]);
-  float h1 = rnd(seed, 0x1234u), h2 = rnd(seed, 0x5678u), h3 = rnd(seed, 0x9abcu);
-  vec3 base = hueShift(mix(A, B, h1), (h2 - 0.5) * 1.3);
-  base = hueOf(base + 0.04);
-  c1 = mix(base, vec3(1.0), 0.22) * 0.70;
-  c2 = hueOf(hueShift(base, (h3 < 0.5 ? -1.0 : 1.0) * (0.35 + 0.5 * h3))) * 0.30;
-  c3 = mix(mix(C, base, 0.35), vec3(1.0), 0.45) * 0.8;
-  atmo = hueOf(mix(C, base, 0.25 + 0.3 * h3));
-}
-
 // ---------------------------------------------------------------- planet
-vec4 shadePlanet(vec2 p, float r, uint seed, int pal, bool ringed) {
-  vec3 c1, c2, c3, atmo;
-  planetPalette(seed, pal, c1, c2, c3, atmo);
+vec4 shadePlanet(vec2 p, float r, uint seed, bool ringed) {
+  vec3 c1 = vC1, c2 = vC2, c3 = vC3, atmo = vAtmo;
   float d = length(p);
   float q = d / r;
   vec4 res = vec4(0.0);
@@ -380,16 +399,17 @@ void main() {
   vec4 aux = vC;
   uint seed = vI.x, type = vI.y, flags = vI.z;
   int pal = int(vI.w);
+  float ext = vB.x;
+  float d2 = dot(p, p);
+  // Quad corners outside the instance extent: every term below is faded to zero there anyway.
+  if (type != 5u && d2 >= ext * ext) { outColor = vec4(0.0); return; }
   vec4 res = vec4(0.0);
   if (type == 0u) {
-    vec3 c1, c2, c3, atmo;
-    planetPalette(seed, pal, c1, c2, c3, atmo);
-    vec3 idle = mix(atmo, vec3(1.0), 0.35);
+    vec3 idle = mix(vAtmo, vec3(1.0), 0.35);
     res.rgb = captureRing(p, r, rc, hi, pulse, idle);
-    if (aux.x != 0.0) res.rgb += driftWake(p, r, aux.x, mix(atmo, vec3(1.0), 0.3));
-    float d2 = dot(p, p);
+    if (aux.x != 0.0) res.rgb += driftWake(p, r, aux.x, mix(vAtmo, vec3(1.0), 0.3));
     float reach = r * ((flags & 1u) != 0u ? 2.1 : 1.6);
-    if (d2 < reach * reach) res = over(shadePlanet(p, r, seed, pal, (flags & 1u) != 0u), res);
+    if (d2 < reach * reach) res = over(shadePlanet(p, r, seed, (flags & 1u) != 0u), res);
   } else if (type == 1u) {
     res = shadeMoon(p, r, seed, pal);
   } else if (type == 2u) {
@@ -399,15 +419,12 @@ void main() {
   } else if (type == 4u) {
     res.rgb = moonTrace(p, r, aux, pal);
   } else {
-    vec3 c1, c2, c3, atmo;
-    planetPalette(seed, pal, c1, c2, c3, atmo);
-    res.rgb = driftTrack(p, aux, mix(atmo, vec3(1.0), 0.4));
+    res.rgb = driftTrack(p, aux, mix(vAtmo, vec3(1.0), 0.4));
     outColor = res;
     return;
   }
   // Fade to zero before the quad edge so no glow term is ever cut off by the quad.
-  float ext = vB.x;
-  res *= 1.0 - smoothstep(ext - 15.0, ext, length(p));
+  res *= 1.0 - smoothstep(ext - 15.0, ext, sqrt(d2));
   outColor = res;
 }
 `;

@@ -9,7 +9,8 @@
  * body type, lensing, all sprite shapes, trail, front, a live particle, nebula bake, bloom chain,
  * composite) so no pipeline is first built mid-run.
  * Zone changes cross-fade the nebula textures, the walls and the accent (aim line and highlighted
- * rings, front, pulses) over CONFIG.ZONE_CROSSFADE_S.
+ * rings, front, pulses) over CONFIG.NEBULA_CROSSFADE_S (every nebula is pre-baked, background.js).
+ * The death burst is spawned over CONFIG.DEATH_SPAWN_FRAMES frames with back-dated births.
  */
 import { CONFIG, STEP } from '../config.js';
 import { COMET, EV, SCREEN } from '../contracts.js';
@@ -88,6 +89,11 @@ export function createRenderer(canvas, opts = {}) {
   let grazeCarry = 0;
   let lastCX = 0, lastCY = 0, haveLast = false;
   let lastTier = 1;
+
+  // Death burst spread over a few frames (Phase 4): everything is captured at the event and
+  // every particle is born at the death time, so it looks exactly like a single-frame spawn.
+  let deathLeft = 0, deathPerFrame = 0, deathX = 0, deathY = 0, deathBirth = 0;
+  const deathTier = new Float32Array(3), deathAcc = new Float32Array(3);
 
   // Screen state.
   let dim = 0, dimTarget = 0;
@@ -176,7 +182,7 @@ export function createRenderer(canvas, opts = {}) {
     bodies.draw(gfx, cam.sx, cam.sy, accent, ambient, upp);
     fx.drawFront(gfx, frontRel, cam, width, height, accent, ambient, force);
     fx.drawTrail(gfx, cam.sx, cam.sy, force);
-    particles.draw(gfx, effect, cam.x + cam.shakeX, cam.y + cam.shakeY, cam.sx, cam.sy, pxClipX, pxClipY, 0);
+    particles.draw(gfx, effect, cam.x + cam.shakeX, cam.y + cam.shakeY, cam.sx, cam.sy, pxClipX, pxClipY);
     fx.drawSprites(gfx, cam.sx, cam.sy, force);
     const sf = clamp((cam.speed - SPEED_REF_LO) / (SPEED_REF_HI - SPEED_REF_LO), 0, 1);
     const ca = reducedMotion ? 0 : 0.0012 + 0.0055 * sf;
@@ -208,6 +214,25 @@ export function createRenderer(canvas, opts = {}) {
     }
   }
 
+  /** Spawn up to n of the pending death-burst particles. @param {number} n */
+  function spawnDeath(n) {
+    if (n > deathLeft) n = deathLeft;
+    deathLeft -= n;
+    for (let i = 0; i < n; i++) {
+      const ang = Math.random() * Math.PI * 2;
+      const u = Math.random();
+      const v = 40 + 1100 * u * u * u + rand(0, 120);
+      const pick = Math.random();
+      let r = deathTier[0], g = deathTier[1], bb = deathTier[2];
+      if (pick < 0.25) { r = 2.2; g = 2.0; bb = 1.8; } else if (pick < 0.42) { r = deathAcc[0] * 2; g = deathAcc[1] * 2; bb = deathAcc[2] * 2; }
+      const k = rand(0.9, 2.0);
+      P[0] = deathX; P[1] = deathY; P[2] = Math.cos(ang) * v; P[3] = Math.sin(ang) * v; P[4] = deathBirth;
+      P[5] = rand(0.8, 2.2); P[6] = rand(3, 10); P[7] = rand(1.0, 2.6); P[8] = r * k;
+      P[9] = g * k; P[10] = bb * k; P[11] = 1.4;
+      particles.commit();
+    }
+  }
+
   /** Tail emission and graze sparks for this frame. @param {import('../contracts.js').WorldT} world */
   function emit(world) {
     const c = world.comet;
@@ -223,7 +248,10 @@ export function createRenderer(canvas, opts = {}) {
     let n = emitCarry | 0;
     emitCarry -= n;
     if (n > 64) n = 64;
+    // Lifetimes stay in PARTICLE_LIFE_MIN..MAX at every tier (PLAN §4.3); the tier's tail length
+    // is the fade exponent instead (2 at ×5, faster below: same visible length as a lifetime ×lifeK).
     const lifeK = TAILS[tier - 1] / TAILS[4];
+    const fadePow = 2 / lifeK;
     const sp = c.speed > 1 ? c.speed : 1;
     const ux = c.vx / sp, uy = c.vy / sp;
     for (let i = 0; i < n; i++) {
@@ -236,9 +264,9 @@ export function createRenderer(canvas, opts = {}) {
       const sz = CONFIG.PARTICLE_SIZE_MIN_PX + (CONFIG.PARTICLE_SIZE_MAX_PX - CONFIG.PARTICLE_SIZE_MIN_PX) * Math.random() * Math.random();
       P[0] = px; P[1] = py; P[2] = -ux * back - uy * side; P[3] = -uy * back + ux * side;
       P[4] = effect - (1 - s) * effectDt;
-      P[5] = rand(CONFIG.PARTICLE_LIFE_MIN, CONFIG.PARTICLE_LIFE_MAX) * lifeK; P[6] = sz;
+      P[5] = rand(CONFIG.PARTICLE_LIFE_MIN, CONFIG.PARTICLE_LIFE_MAX); P[6] = sz;
       P[7] = 1.8; P[8] = white ? 1.5 : tierCol[0] * k; P[9] = white ? 1.45 : tierCol[1] * k;
-      P[10] = white ? 1.4 : tierCol[2] * k; P[11] = 0;
+      P[10] = white ? 1.4 : tierCol[2] * k; P[11] = -fadePow;
       particles.commit();
     }
     // Graze sparks: thrown off where the comet skims the surface.
@@ -298,6 +326,13 @@ export function createRenderer(canvas, opts = {}) {
     readCssSize();
   }
 
+  // JS warm-up (boot only): the death burst runs once per run, so its spawn loop would otherwise
+  // first run cold (interpreted) on the death frame. Spawn one full burst of already-dead particles
+  // now so the engine has compiled it, then empty the ring (nothing is drawn or kept).
+  deathBirth = -1e6; deathLeft = CONFIG.DEATH_PARTICLES;
+  while (deathLeft > 0) spawnDeath(Math.ceil(CONFIG.DEATH_PARTICLES / CONFIG.DEATH_SPAWN_FRAMES));
+  particles.clear(0);
+
   /** @type {import('../contracts.js').Renderer} */
   const renderer = {
     gl,
@@ -305,7 +340,12 @@ export function createRenderer(canvas, opts = {}) {
 
     draw(world, alpha, dtReal) {
       const t0 = performance.now();
-      const frameMs = lastDrawAt < 0 ? 0 : t0 - lastDrawAt;
+      // Adaptive scale input: the rAF-to-rAF interval the caller measured from rAF timestamps
+      // (vsync aligned), not performance.now() here, which also moves with however long this
+      // frame's sim steps took before draw() (Phase 4: that jitter alone stepped the scale down in
+      // headless Chromium at a steady 60 Hz). An interval at the caller's MAX_FRAME_DT clamp is a
+      // pause or hitch, not render cost: skipped (0).
+      const frameMs = lastDrawAt < 0 || !(dtReal > 0) || dtReal >= CONFIG.MAX_FRAME_DT ? 0 : dtReal * 1000;
       lastDrawAt = t0;
       if (gfx) gfx.drawCalls = 0;
       if (!gfx || lost || !ready || gfx.gl.isContextLost()) { stats.drawCalls = 0; return; }
@@ -322,6 +362,7 @@ export function createRenderer(canvas, opts = {}) {
       effect += d;
       effectDt = d;
       particles.beginFrame(effect);
+      if (deathLeft > 0) spawnDeath(deathPerFrame);
 
       // Palette / zone.
       const pal = paletteIndex(world.score.zone);
@@ -378,14 +419,14 @@ export function createRenderer(canvas, opts = {}) {
           bodies.pulse(a | 0);
           burst(x, y, 56, 80, 420, 0.4, 0.9, 3, 8, 3.2, tierCol[0], tierCol[1], tierCol[2], 0.25, 1);
           fx.addPulse(x, y, effect, 0.45, 130, tierCol[0] * 1.6, tierCol[1] * 1.6, tierCol[2] * 1.6);
-          if (!reduced) addShake(cam, CONFIG.CATCH_SHAKE * 0.6);
+          if (!reduced) addShake(cam, CONFIG.CATCH_SHAKE_PX * cam.viewW / cssW);
           break;
         }
         case EV.PERFECT: {
           bodies.pulse(a | 0);
           burst(x, y, 150, 150, 700, 0.5, 1.2, 3, 9, 2.6, accent[0] * 1.8, accent[1] * 1.8, accent[2] * 1.8, 0.35, 1.2);
           fx.addPulse(x, y, effect, 0.6, 240, accent[0] * 2.2, accent[1] * 2.2, accent[2] * 2.2);
-          if (!reduced) addShake(cam, CONFIG.CATCH_SHAKE);
+          if (!reduced) addShake(cam, CONFIG.PERFECT_SHAKE_PX * cam.viewW / cssW);
           break;
         }
         case EV.RELEASE: {
@@ -439,20 +480,12 @@ export function createRenderer(canvas, opts = {}) {
           break;
         }
         case EV.DEATH: {
-          const n = CONFIG.DEATH_PARTICLES;
-          for (let i = 0; i < n; i++) {
-            const ang = Math.random() * Math.PI * 2;
-            const u = Math.random();
-            const v = 40 + 1100 * u * u * u + rand(0, 120);
-            const pick = Math.random();
-            let r = tierCol[0], g = tierCol[1], bb = tierCol[2];
-            if (pick < 0.25) { r = 2.2; g = 2.0; bb = 1.8; } else if (pick < 0.42) { r = accent[0] * 2; g = accent[1] * 2; bb = accent[2] * 2; }
-            const k = rand(0.9, 2.0);
-            P[0] = x; P[1] = y; P[2] = Math.cos(ang) * v; P[3] = Math.sin(ang) * v; P[4] = effect;
-            P[5] = rand(0.8, 2.2); P[6] = rand(3, 10); P[7] = rand(1.0, 2.6); P[8] = r * k;
-            P[9] = g * k; P[10] = bb * k; P[11] = 1.4;
-            particles.commit();
-          }
+          deathX = x; deathY = y; deathBirth = effect;
+          deathTier[0] = tierCol[0]; deathTier[1] = tierCol[1]; deathTier[2] = tierCol[2];
+          deathAcc[0] = accent[0]; deathAcc[1] = accent[1]; deathAcc[2] = accent[2];
+          deathLeft = CONFIG.DEATH_PARTICLES;
+          deathPerFrame = Math.ceil(deathLeft / CONFIG.DEATH_SPAWN_FRAMES);
+          spawnDeath(deathPerFrame);   // the first share now; the rest at the start of the next draws
           fx.addPulse(x, y, effect, 0.9, 620, 0.5 + accent[0] * 1.1, 0.5 + accent[1] * 1.1, 0.5 + accent[2] * 1.1);
           fx.addPulse(x, y, effect, 1.4, 360, tierCol[0] * 2, tierCol[1] * 2, tierCol[2] * 2);
           flash = reduced ? 0.12 : 0.28;
@@ -478,6 +511,7 @@ export function createRenderer(canvas, opts = {}) {
       fx.reset();
       background.resetFx();
       haveLast = false; emitCarry = 0; grazeCarry = 0;
+      deathLeft = 0;
       flash = 0;
       lastSimTime = -1;
       scaler.newRun();

@@ -4,7 +4,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { botRun } from './helpers.js';
 import { EV, COMET } from '../src/contracts.js';
-import { CONFIG } from '../src/config.js';
+import { CONFIG, STEP } from '../src/config.js';
+import { createWorld } from '../src/sim/world.js';
 
 const CAUSE = ['planet', 'moon', 'blackhole', 'front'];
 
@@ -64,4 +65,24 @@ test('bot statistics over 100 seeds × 90 s (diagnostic; asserts only sanity)', 
   t.diagnostic(`90s runs: mean pathReached ${(sumPath / 100).toFixed(1)} (min ${minPath}, max ${maxPath}), ` +
     `mean zone ${(sumZone / 100).toFixed(1)}, outcomes ${JSON.stringify(causes)}`);
   assert.ok(minPath >= 30);
+});
+
+// Phase 4: before the start the home orbit lets go only on a line lit onto a path planet (the first
+// act is a safe release, PLAN §2.7), so every course must offer one within a lap of the home orbit.
+test('every course: the home orbit has a lit line onto a path planet within one lap (200 seeds)', (t) => {
+  const inp = { held: false, pressedThisStep: false, releasedThisStep: false };
+  let worst = 0;
+  const none = [];
+  for (let seed = 1; seed <= 200; seed++) {
+    const w = createWorld({ seed });
+    const lap = Math.ceil((2 * Math.PI * w.comet.orbitRadius) / w.comet.speed / STEP);
+    let wait = -1;
+    for (let k = 0; k <= lap && wait < 0; k++) {
+      if (w.aim.clear && w.bodies.pathIndex[w.aim.target] > 0) wait = k;
+      else w.step(STEP, inp);
+    }
+    if (wait < 0) none.push(seed); else worst = Math.max(worst, wait * STEP);
+  }
+  t.diagnostic(`longest wait for a lit line from the start of the home orbit: ${worst.toFixed(2)} s`);
+  assert.deepEqual(none, []);
 });

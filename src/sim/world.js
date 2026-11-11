@@ -10,7 +10,7 @@ import { BODY, COMET, MODE, EV, COMBO_BREAK_REASON, DEATH_CAUSE } from '../contr
 import { createEventQueue, clearEvents, pushEvent } from '../core/events.js';
 import { rayCircleHit, OUT, TAU, DEG } from '../core/math.js';
 import { createGenerator } from './generator.js';
-import { updateBodyMotion, blackHoleAccel, posAt, envelopeOf, MT, MP, ENV, MOVING_FLAGS } from './hazards.js';
+import { updateBodyMotion, blackHoleAccel, blackHoleAccelAt, BHQ, posAt, envelopeOf, partnerOf, maxSpeedOf, MT, MP, ENV, VS, MOVING_FLAGS } from './hazards.js';
 import { comboUp, comboBreak, reachPath, updateHeight } from './scoring.js';
 
 /** @typedef {import('../contracts.js').WorldT} WorldT */
@@ -46,6 +46,35 @@ const RAY = new Float64Array(6);
 const MV = new Float64Array(4);
 /** Black-hole acceleration out-param. */
 const ACC = new Float64Array(2);
+/** The aim forecast's black-hole acceleration out-param. */
+const ACC2 = new Float64Array(2);
+/** Aim path being built by castAim: vertices as (x, y) offsets from its origin (PATH_O), PATH_N[0]
+ * of them. computeAim copies the final one into world.aim.points. */
+const AIM_PATH_MAX = CONFIG.AIM_PATH_MAX_POINTS;
+const PATH = new Float32Array(2 * AIM_PATH_MAX);
+const PATH_N = new Int32Array(1);
+const PATH_O = new Float64Array(2);
+/** castAim's release time (world time at the cast origin), for latchSafe. */
+const CAST_T0 = new Float64Array(1);
+/** Binary partner of the orbited planet while castAim is on its first straight leg, else -1: its
+ * ring is not a target (not progress, and a press does not latch it on that flight), its body is
+ * an obstacle like any other. */
+const AIMP = new Int32Array(1);
+/** pushPath input: the vertex's absolute position. */
+const PV = new Float64Array(2);
+/**
+ * Bent-flight forecast state (castAim / marchBent): MS[0..1] position, MS[2..3] velocity, MS[4]
+ * speed, MS[5] world time (exactly as free flight would have them at a step boundary), MS[6] arc
+ * length flown since the release, MS[7] closest comet-to-core surface distance seen.
+ */
+const MS = new Float64Array(8);
+/** castStraight results: LEG[0] = distance along the leg to the first hit (body or influence-free
+ * drawn end), LEG[1] = distance to the first black-hole influence entry (Infinity if none). */
+const LEG = new Float64Array(2);
+/** Slingshot depth scaling: SL[0] = closest approach to the hole's centre (in), SL[1] = paid fraction (out). */
+const SL = new Float64Array(2);
+const AIM_MIN_ENTRY_S = CONFIG.AIM_MIN_ENTRY_S, AIM_SAFE_PRESS_S = CONFIG.AIM_SAFE_PRESS_S;
+const AIM_CORE_CLEARANCE = CONFIG.AIM_CORE_CLEARANCE;
 const HASH_F64 = new Float64Array(1);
 const HASH_U32 = new Uint32Array(HASH_F64.buffer);
 
@@ -65,9 +94,17 @@ const HASH_U32 = new Uint32Array(HASH_F64.buffer);
  * @property {boolean} leftInside     Not yet clear of the ring of the planet just left (slot leftSlot):
  *                                    a press does not re-catch it unless the comet heads back in.
  * @property {number} leftSlot
+ * @property {number} relDx           Unit flight direction at the last release (ignoreLeft).
+ * @property {number} relDy
  * @property {number} bhId            id of the black hole whose influence the comet is in (0 none).
  * @property {number} bhSlot
  * @property {number} bhMin           Closest distance to that hole's centre in this pass.
+ * @property {boolean} queued         Pre-start: a release happened while the aim line was dark; the
+ *                                    comet lets go at the first step the line is lit (a new hold cancels).
+ * @property {number} passSlot        Binary partner of the planet just left, after a release on a lit
+ *                                    line (-1 otherwise): not latchable while the comet still flies
+ *                                    straight along that line (the line looked past its ring).
+ * @property {number} passId          bodies.id of passSlot.
  */
 
 /** @returns {import('../contracts.js').Bodies} */
@@ -127,7 +164,10 @@ export function createWorld(opts = {}) {
     },
     bodies: createBodies(),
     motes: createMotes(),
-    aim: { active: false, x0: 0, y0: 0, dx: 0, dy: 1, length: 0, target: -1, clear: false },
+    aim: {
+      active: false, x0: 0, y0: 0, dx: 0, dy: 1, length: 0, target: -1, clear: false,
+      points: new Float32Array(2 * CONFIG.AIM_PATH_MAX_POINTS), pointCount: 0,
+    },
     front: { y: 0, py: 0, speed: 0 },
     score: {
       score: 0, combo: 0, bestCombo: 0, tier: 1, multiplier: 1, zone: 1,
@@ -148,7 +188,8 @@ export function createWorld(opts = {}) {
     nmX: new Float64Array(cap),
     nmY: new Float64Array(cap),
     grazeAcc: 0, streakLine: -1, streakIdx: 0, lapBroken: false,
-    leftInside: false, leftSlot: -1, bhId: 0, bhSlot: -1, bhMin: 0,
+    leftInside: false, leftSlot: -1, bhId: 0, bhSlot: -1, bhMin: 0, queued: false, relDx: 0, relDy: 1,
+    passSlot: -1, passId: 0,
   };
   reset(world, sim, opts.seed ?? 1, opts.mode ?? MODE.ENDLESS);
   return world;
@@ -163,7 +204,8 @@ function reset(w, sim, seed, mode) {
   clearEvents(w.events);
   sim.caughtId.fill(0); sim.nmId.fill(0); sim.nmState.fill(0);
   sim.grazeAcc = 0; sim.streakLine = -1; sim.streakIdx = 0; sim.lapBroken = false;
-  sim.leftInside = false; sim.leftSlot = -1; sim.bhId = 0; sim.bhSlot = -1; sim.bhMin = 0;
+  sim.leftInside = false; sim.leftSlot = -1; sim.bhId = 0; sim.bhSlot = -1; sim.bhMin = 0; sim.queued = false;
+  sim.passSlot = -1; sim.passId = 0;
   const s = w.score;
   s.score = 0; s.combo = 0; s.bestCombo = 0; s.tier = 1; s.multiplier = 1; s.zone = 1;
   s.maxHeight = 0; s.catches = 0; s.perfects = 0; s.pathReached = 0;
@@ -178,7 +220,8 @@ function reset(w, sim, seed, mode) {
   c.speed = w.baseSpeed;
   placeOnOrbit(w);
   c.px = c.x; c.py = c.y;
-  w.front.y = w.front.py = CONFIG.HOME_Y - CONFIG.FRONT_START_BELOW; w.front.speed = 0;
+  // PLAN §2.2: the front starts FRONT_START_BELOW under the comet (re-anchored at the first release).
+  w.front.y = w.front.py = c.y - CONFIG.FRONT_START_BELOW; w.front.speed = 0;
   sim.gen.update(1000);
   computeAim(w);
 }
@@ -217,7 +260,15 @@ function step(w, sim, dt, input) {
 
     if (c.state === COMET.ORBIT) {
       if (!w.started) {
-        if (released) release(w, sim);
+        // The first act is a safe release (PLAN §2.7): a release while the aim line is not lit onto
+        // a path planet ahead is queued, and the comet lets go at the first step it is — exactly
+        // along the line the player sees (world.aim is from the end of the previous step, at this
+        // position). Holding again cancels it. (Side planets are not lit targets here: they need
+        // not have a way on up the course.)
+        if (held) sim.queued = false;
+        else if (released) sim.queued = true;
+        const a = w.aim;
+        if (sim.queued && a.active && a.clear && b.pathIndex[a.target] > b.pathIndex[c.body]) release(w, sim);
         else advanceOrbit(w, sim, dt, false);
       } else if (!held) release(w, sim);
       else advanceOrbit(w, sim, dt, true);
@@ -325,14 +376,32 @@ function tryLatch(w, sim, isPress) {
  * (after a bounce or a black-hole bend), re-catching is possible and resets the combo (PLAN.md
  * §2.3). The margin matters for drifting planets: a comet leaving tangentially from the ring edge
  * can hover at the edge while the planet drifts after it.
+ * Binary pairs (Phase 4): after a release on a lit line from one member, the partner's ring (which
+ * the line looked past, see castAim) cannot be latched until the flight changes direction, so a
+ * press on the way arms the hold for the lit ring. After a dark release it is catchable as usual
+ * (no new planet: see latch).
  * @param {WorldT} w @param {Sim} sim @param {number} i
  */
 function ignoreLeft(w, sim, i) {
+  if (i === sim.passSlot) return w.bodies.id[i] === sim.passId && flyingStraight(w, sim);
   if (!sim.leftInside || i !== sim.leftSlot) return false;
   const c = w.comet, b = w.bodies;
   // Velocity relative to the planet (a drifting or binary planet moves too), as one step's motion.
   const rvx = c.vx * STEP - (b.x[i] - b.px[i]), rvy = c.vy * STEP - (b.y[i] - b.py[i]);
+  // Still flying straight along the release line: never "heading back in", even though an
+  // aim-assisted release (turned up to AIM_ASSIST_DEG toward the target) can start slightly inward
+  // (Phase 4: a quick re-press after an assisted release used to re-latch the planet just left —
+  // e.g. home, right after the first fling). Only a bounce, a black-hole bend or another change of
+  // direction makes a re-catch possible.
+  if (flyingStraight(w, sim)) return true;
   return (c.x - b.x[i]) * rvx + (c.y - b.y[i]) * rvy >= 0;
+}
+
+/** Is the comet still flying along the line it was released on (no bounce or bend since)?
+ * @param {WorldT} w @param {Sim} sim */
+function flyingStraight(w, sim) {
+  const c = w.comet;
+  return c.speed > 0 && (c.vx * sim.relDx + c.vy * sim.relDy) / c.speed >= 1 - 1e-9;
 }
 
 /** @param {number} ty BODY.* */
@@ -358,6 +427,7 @@ function latch(w, sim, i, isPress) {
   placeOnOrbit(w);
   sim.lapBroken = false;
   sim.leftInside = false;
+  sim.passSlot = -1;
   sim.bhId = 0; // latching inside an influence radius forfeits the slingshot
   sim.nmId[i] = b.id[i]; sim.nmState[i] = 2;
 
@@ -372,6 +442,11 @@ function latch(w, sim, i, isPress) {
     return;
   }
   sim.caughtId[i] = id;
+  // Either member of a binary pair catches that path step: the other one is no new planet after it
+  // (no catch points, no combo change; and as the partner of the planet just left it does not count
+  // as a re-catch either, so hopping across the pair never breaks the combo).
+  const p = partnerOf(b, i);
+  if (p >= 0) sim.caughtId[p] = b.id[p];
   const inc = perfect ? 2 : 1;
   pushEvent(w.events, EV.LATCH, c.x, c.y, i, s.combo + inc);
   comboUp(w, inc);
@@ -383,6 +458,7 @@ function latch(w, sim, i, isPress) {
     s.perfects++;
     pushEvent(w.events, EV.PERFECT, c.x, c.y, i, bonus);
   }
+  // A zone change can raise the speed to the new base speed; reachPath rescales the velocity with it.
   if (b.pathIndex[i] > 0) reachPath(w, b.pathIndex[i]);
 }
 
@@ -391,14 +467,16 @@ function release(w, sim) {
   const c = w.comet, b = w.bodies;
   const left = c.body;
   const a = w.aim;
+  let lit = false;
   if (a.active && a.x0 === c.x && a.y0 === c.y) {
     // The comet has not moved since the aim line was computed (end of the previous step): leave
     // exactly along the line the player saw. Re-solving would see moving bodies one step later
     // (aim assist aims at their current positions) and could flip a marginal window.
     c.vx = a.dx * c.speed; c.vy = a.dy * c.speed;
+    lit = a.clear;
   } else {
     RAY[5] = w.time - STEP; // this step's motion starts from the orbit position of the previous step
-    solveAim(w);
+    lit = solveAim(w) >= 0;
     c.vx = AIM[0] * c.speed; c.vy = AIM[1] * c.speed;
   }
   c.heading = Math.atan2(c.vy, c.vx);
@@ -410,8 +488,13 @@ function release(w, sim) {
   if (left >= 0) { sim.nmId[left] = b.id[left]; sim.nmState[left] = 2; }
   sim.leftInside = left >= 0 && b.alive[left] === 1;
   sim.leftSlot = left;
+  sim.passSlot = lit && left >= 0 ? partnerOf(b, left) : -1;
+  sim.passId = sim.passSlot >= 0 ? b.id[sim.passSlot] : 0;
+  sim.relDx = c.vx / c.speed; sim.relDy = c.vy / c.speed;
   if (!w.started) {
     w.started = true;
+    sim.queued = false;
+    w.front.y = w.front.py = c.y - CONFIG.FRONT_START_BELOW;
     w.front.speed = CONFIG.FRONT_SPEED_START;
   }
   pushEvent(w.events, EV.RELEASE, c.x, c.y, c.speed, c.heading);
@@ -497,7 +580,8 @@ function advanceFree(w, sim, dt) {
   }
 
   // Black-hole passes: entering an influence radius starts a pass; leaving it alive (in free
-  // flight, deep enough) pays the slingshot.
+  // flight) pays the slingshot, scaled by how deep the pass went (PLAN §2.5). castAim's bent-path
+  // forecast (marchBent) mirrors this block exactly.
   if (sim.bhId !== 0 && (!b.alive[sim.bhSlot] || b.id[sim.bhSlot] !== sim.bhId)) sim.bhId = 0;
   for (let i = 0, n = b.count; i < n; i++) {
     if (!b.alive[i] || b.type[i] !== BODY.BLACKHOLE) continue;
@@ -506,19 +590,38 @@ function advanceFree(w, sim, dt) {
     if (d < b.rc[i]) {
       if (sim.bhId !== b.id[i]) { sim.bhId = b.id[i]; sim.bhSlot = i; sim.bhMin = d; }
       else if (d < sim.bhMin) sim.bhMin = d;
-    } else if (sim.bhId === b.id[i]) {
+    } else if (sim.bhId !== 0 && sim.bhId === b.id[i]) { // 0 = no pass (never match an id-less slot)
       sim.bhId = 0;
-      if (sim.bhMin <= CONFIG.BLACKHOLE_SLINGSHOT_DEPTH * b.rc[i]) slingshot(w, i);
+      SL[0] = sim.bhMin;
+      slingScale(b, i);
+      slingshot(w, i);
     }
   }
 }
 
-/** Survived a pass through black hole i's influence: bonus points and a speed boost. @param {WorldT} w @param {number} i */
+/**
+ * Fraction of the slingshot a pass through hole i pays, from its closest approach SL[0] to the
+ * centre: BLACKHOLE_SLINGSHOT_MIN_SCALE at the influence edge, rising linearly to 1 at
+ * BLACKHOLE_SLINGSHOT_DEPTH × influence and deeper. Writes SL[1].
+ * @param {import('../contracts.js').Bodies} b @param {number} i
+ */
+function slingScale(b, i) {
+  const rc = b.rc[i], lo = CONFIG.BLACKHOLE_SLINGSHOT_MIN_SCALE;
+  const span = (1 - CONFIG.BLACKHOLE_SLINGSHOT_DEPTH) * rc;
+  let q = span > 0 ? (rc - SL[0]) / span : 1;
+  if (q > 1) q = 1; else if (q < 0) q = 0;
+  SL[1] = lo + (1 - lo) * q;
+}
+
+/**
+ * Survived a pass through black hole i's influence: bonus points and a speed boost, both scaled
+ * by SL[1] (slingScale). @param {WorldT} w @param {number} i
+ */
 function slingshot(w, i) {
   const c = w.comet, s = w.score;
-  const pts = CONFIG.BLACKHOLE_SLINGSHOT_POINTS * s.multiplier;
+  const pts = Math.round(CONFIG.BLACKHOLE_SLINGSHOT_POINTS * s.multiplier * SL[1]);
   s.score += pts;
-  let sp = c.speed * CONFIG.BLACKHOLE_SPEED_BOOST;
+  let sp = c.speed * (1 + (CONFIG.BLACKHOLE_SPEED_BOOST - 1) * SL[1]);
   const cap = w.baseSpeed * CONFIG.SPEED_CAP_FACTOR * CONFIG.BLACKHOLE_SPEED_BOOST;
   if (sp > cap) sp = cap;
   if (sp > c.speed && c.speed > 0) {
@@ -629,27 +732,114 @@ function die(w, cause, slot) {
 // ================================================================ aim
 
 /**
- * Cast the release ray in RAY and return the slot of the planet whose capture ring it enters first,
- * cleanly: at least AIM_RING_MARGIN deep before touching any body (black-hole influence counts as
- * a hit), before a wall and within AIM_TARGET_RANGE. Writes the drawn length into AIM[2]; -1 if none.
+ * Forecast a release from RAY (origin, unit direction, speed, world time) and return the slot of
+ * the planet whose capture ring the flight enters first, cleanly — or -1. Clean means: it reaches
+ * AIM_RING_MARGIN inside the ring before touching any body or a wall, within AIM_TARGET_RANGE of
+ * flight; a human re-press after the release latches it safely (latchSafe: no ring entered too
+ * soon to press before it unless the latch there is safe); and
+ * any black-hole pass on the way keeps AIM_CORE_CLEARANCE from the core. Writes the drawn length (AIM_LINE_LENGTH of flight, or less where it would hit) into AIM[2]
+ * and the drawn path into PATH / PATH_N (offsets from PATH_O = the origin).
  *
- * Honest about motion: static bodies are tested analytically; moons and drifting / binary planets
- * are tested where they WILL be when the comet gets there (the comet flies straight at RAY[4] from
- * time RAY[5]; positions are pure functions of time), sampling every AIM_MARCH_STEP units along
- * the part of the ray that passes the body's motion envelope. So a moon that will have moved out
- * of the way does not block the line, one that will swing into it does, and a drifting planet
- * lights up only if the comet will meet its ring.
+ * Straight legs are tested analytically (castStraight). Where a leg enters a black hole's influence
+ * the flight is bent, and marchBent steps it exactly as free flight will (same fixed step, same
+ * acceleration code, same slingshot boost on the way out), then the next straight leg starts where
+ * the comet leaves the influence. So the line follows the path the comet really takes, and lights
+ * a slingshot only when that path really ends in a ring.
  *
- * Black holes: the line never lights through an influence radius. Free flight there is bent, so a
- * straight ray through it would promise a path the comet does not take; slingshots are a gamble
- * the player takes without the light.
- * @param {WorldT} w @param {number} exclude
+ * Honest about motion: moons and drifting / binary planets are tested where they WILL be when the
+ * comet gets there (positions are pure functions of time), see marchMoving.
+ *
+ * Binary pairs: from one member the line looks past its partner's ring (it is not progress, and
+ * after a lit release a press on that straight flight does not latch it; see ignoreLeft) to the
+ * next ring, but the partner's body blocks it like any body, where it will be. Onto a binary,
+ * whichever member's ring the flight enters first is the target (both are the same path step).
+ * @param {WorldT} w @param {number} exclude  The orbited planet (never a target on the first leg).
  */
 function castAim(w, exclude) {
+  CAST_T0[0] = RAY[5];
+  PATH_O[0] = RAY[0]; PATH_O[1] = RAY[1];
+  PATH[0] = 0; PATH[1] = 0; PATH_N[0] = 1;
+  MS[6] = 0; MS[7] = Infinity;
+  AIM[2] = 0;
+  AIMP[0] = exclude >= 0 ? partnerOf(w.bodies, exclude) : -1;
+  let ex = exclude;
+  for (let leg = 0; leg <= CONFIG.AIM_MAX_BENDS; leg++) {
+    const target = castStraight(w, ex);
+    if (target !== -2) {
+      // Draw this leg up to its first hit (or the rest of AIM_LINE_LENGTH).
+      let len = AIM_LINE_LENGTH - MS[6];
+      if (LEG[0] < len) len = LEG[0];
+      if (len > 0) {
+        PV[0] = RAY[0] + RAY[2] * len; PV[1] = RAY[1] + RAY[3] * len; pushPath();
+        AIM[2] = MS[6] + len;
+      }
+      if (target < 0 || MS[7] < AIM_CORE_CLEARANCE) return -1;
+      return latchSafe(w, target) ? target : -1;
+    }
+    if (leg === CONFIG.AIM_MAX_BENDS || !marchBent(w, leg === 0)) return -1;
+    ex = -1; // after a bend the comet could come back into the ring it left (or its partner's)
+    AIMP[0] = -1;
+  }
+  return -1;
+}
+
+/**
+ * Can a human catch the target safely after this release? A ring entered at least AIM_MIN_ENTRY_S
+ * after the release: yes — a re-press before the entry arms the hold, which latches at the ring
+ * edge. A ring entered sooner (or already around the comet) is caught wherever the comet is when
+ * the finger comes back down, so from the entry until AIM_SAFE_PRESS_S the comet must stay inside
+ * the ring and no deeper than the safe floor (AIM_LATCH_FLOOR above the surface, AIM_LATCH_MOON_GAP
+ * clear of the target's moon lane) — otherwise the line stays dark (Phase 4: lit lines used to
+ * promise rings left within 150 ms, or latches in a moon lane).
+ * Uses the current straight leg in RAY (the target ring is always entered on the last leg) and
+ * MV[1] (ring entry distance along it); CAST_T0[0] is the release time. @param {WorldT} w @param {number} tgt
+ */
+function latchSafe(w, tgt) {
+  const b = w.bodies;
+  const sp = RAY[4] > 1 ? RAY[4] : 1;
+  const legT = RAY[5] - CAST_T0[0];
+  const tE = legT + MV[1] / sp;
+  if (tE >= AIM_MIN_ENTRY_S) return true;
+  let floor = b.r[tgt] + CONFIG.AIM_LATCH_FLOOR;
+  for (let k = 0, n = b.count; k < n; k++) {
+    if (!b.alive[k] || b.type[k] !== BODY.MOON || b.parent[k] !== tgt) continue;
+    const lane = b.m0[k] + b.r[k] + COMET_RADIUS + CONFIG.AIM_LATCH_MOON_GAP;
+    if (lane > floor) floor = lane;
+  }
+  const moving = (b.flags[tgt] & MOVING_FLAGS) !== 0, rc = b.rc[tgt];
+  for (let t = tE; ; t += STEP) {
+    const last = t >= AIM_SAFE_PRESS_S;
+    const s = ((last ? AIM_SAFE_PRESS_S : t) - legT) * sp;
+    let bx = b.x[tgt], by = b.y[tgt];
+    if (moving) { MT[0] = RAY[5] + s / sp; posAt(b, tgt); bx = MP[0]; by = MP[1]; }
+    const dx = RAY[0] + RAY[2] * s - bx, dy = RAY[1] + RAY[3] * s - by;
+    const d2 = dx * dx + dy * dy;
+    if (d2 < floor * floor) return false;
+    if (last) return d2 < rc * rc;
+  }
+}
+
+/** Append the vertex at absolute position (PV[0], PV[1]) to PATH if there is room (doubles go
+ * through memory: as call arguments to a function V8 does not inline they would be boxed). */
+function pushPath() {
+  const n = PATH_N[0];
+  if (n >= AIM_PATH_MAX) return;
+  PATH[2 * n] = PV[0] - PATH_O[0]; PATH[2 * n + 1] = PV[1] - PATH_O[1];
+  PATH_N[0] = n + 1;
+}
+
+/**
+ * One straight leg of castAim, from RAY. Returns the target slot, -1 (no clean target: hit, wall,
+ * out of range, too shallow), or -2 when the leg enters a black hole's influence first (LEG[1] =
+ * entry distance; castAim then bends the flight). LEG[0] = distance to the first body hit; MV[1] =
+ * entry distance into the target's ring. MS[6] (flight so far) limits the range.
+ * @param {WorldT} w @param {number} exclude
+ */
+function castStraight(w, exclude) {
   const b = w.bodies;
   const ox = RAY[0], oy = RAY[1], dx = RAY[2], dy = RAY[3];
   const cr = COMET_RADIUS;
-  let hit = Infinity, ring = Infinity, target = -1, moving = 0;
+  let hit = Infinity, ring = Infinity, target = -1, moving = 0, bend = Infinity;
   for (let i = 0, n = b.count; i < n; i++) {
     if (!b.alive[i] || i === exclude) continue;
     const ty = b.type[i];
@@ -657,7 +847,17 @@ function castAim(w, exclude) {
     // Inlined ray-circle entries for the body and its ring (see advanceFree).
     const fx = ox - b.x[i], fy = oy - b.y[i];
     const f2 = fx * fx + fy * fy, fd = fx * dx + fy * dy;
-    const hr = ty === BODY.BLACKHOLE ? b.rc[i] : b.r[i] + cr;
+    if (ty === BODY.BLACKHOLE) {
+      // The core lies inside the influence, so the influence entry always comes first.
+      const rc = b.rc[i], cc = f2 - rc * rc;
+      if (cc < 0) bend = 0;
+      else if (fd <= 0 && fd * fd >= cc) {
+        const th = -fd - Math.sqrt(fd * fd - cc);
+        if (th < bend) bend = th;
+      }
+      continue;
+    }
+    const hr = b.r[i] + cr;
     let cc = f2 - hr * hr;
     if (cc <= 0) hit = 0;
     else if (fd <= 0 && fd * fd >= cc) {
@@ -668,7 +868,7 @@ function castAim(w, exclude) {
     if (ty === BODY.PLANET && rc > 0) {
       cc = f2 - rc * rc;
       let tr = -1;
-      if (cc <= 0) tr = 0;
+      if (cc <= 0) tr = 0; // already inside: entered "now" (see latchSafe)
       else if (fd <= 0 && fd * fd >= cc) tr = -fd - Math.sqrt(fd * fd - cc);
       if (tr >= 0 && tr < ring) { ring = tr; target = i; }
     }
@@ -686,10 +886,12 @@ function castAim(w, exclude) {
     if (cc <= 0) deep = 0;
     else if (fd <= 0 && fd * fd >= cc) deep = -fd - Math.sqrt(fd * fd - cc);
   }
+  const range = AIM_TARGET_RANGE - MS[6];
 
   if (moving > 0) {
     let limit = hit < wall ? hit : wall;
-    if (limit > AIM_TARGET_RANGE) limit = AIM_TARGET_RANGE;
+    if (bend < limit) limit = bend;
+    if (limit > range) limit = range;
     MV[0] = hit; MV[1] = ring; MV[2] = deep; MV[3] = limit;
     let tgt = target;
     for (let i = 0, n = b.count; i < n && MV[3] > 0; i++) {
@@ -699,10 +901,139 @@ function castAim(w, exclude) {
     }
     hit = MV[0]; ring = MV[1]; deep = MV[2]; target = tgt;
   }
-  AIM[2] = hit < AIM_LINE_LENGTH ? hit : AIM_LINE_LENGTH;
-  if (target < 0 || ring >= hit || ring > wall || ring > AIM_TARGET_RANGE) return -1;
-  if (deep >= hit || deep > wall) return -1;
-  return target;
+  MV[1] = ring;
+  LEG[1] = bend;
+  // The comet latches (armed) where it enters the target ring: a bend or hit after that is moot.
+  const reached = target >= 0 && ring < hit && ring <= wall && ring <= range && deep < hit && deep <= wall;
+  if (bend < Infinity && bend < hit && bend <= wall && bend <= range && !(reached && deep < bend)) {
+    LEG[0] = bend;
+    // A ring entered before the bend but not deep enough before it: no clean promise either way.
+    return ring < bend ? -1 : -2;
+  }
+  LEG[0] = hit;
+  return reached ? target : -1;
+}
+
+/**
+ * Bent leg of castAim: step the flight from the current leg's start exactly as free flight does
+ * (advanceFree: black-hole acceleration at the step's start, then the move, a swept body test with
+ * every body where it will be at that step, walls, then the pass bookkeeping and its slingshot
+ * boost on the way out), drawing a vertex per step. Returns true once the comet is out of every
+ * influence again (MS and RAY then hold the state for the next straight leg), false if the flight
+ * hits something, reaches a wall or runs out of range / steps (AIM[2] then ends there).
+ * `first`: start from the release (RAY) rather than from the previous bent leg's exit (MS).
+ * @param {WorldT} w @param {boolean} first
+ */
+function marchBent(w, first) {
+  const b = w.bodies, cr = COMET_RADIUS;
+  if (first) {
+    // release(): v = aim direction × speed; each step x += v·dt from the release point.
+    MS[0] = RAY[0]; MS[1] = RAY[1]; MS[2] = RAY[2] * RAY[4]; MS[3] = RAY[3] * RAY[4];
+    MS[4] = RAY[4]; MS[5] = RAY[5];
+  }
+  let x = MS[0], y = MS[1], vx = MS[2], vy = MS[3], sp = MS[4], t = MS[5];
+  let arc = MS[6], bhId = 0, bhMin = 0, entered = false;
+  // A leg that only clips an influence edge between two steps is never bent: once it is this far
+  // past castStraight's entry point without having been pulled, it carries on straight.
+  const passBy = arc + LEG[1] + 2 * sp * STEP;
+  // Fast-forward the straight approach: castStraight already cleared it up to the influence entry,
+  // so only the position (the same repeated additions as free flight, for exactness), time and
+  // flown length advance; one vertex marks its end.
+  let k = 0;
+  const seg0 = sp * STEP, skipTo = arc + LEG[1] - 2 * seg0;
+  if (arc + seg0 < skipTo) {
+    while (arc + seg0 < skipTo && k < CONFIG.AIM_BEND_MAX_STEPS) {
+      const ox = x, oy = y;
+      x += vx * STEP; y += vy * STEP; t += STEP; k++;
+      if (arc < AIM_LINE_LENGTH && arc + seg0 > AIM_LINE_LENGTH) {
+        const f = (AIM_LINE_LENGTH - arc) / seg0;
+        PV[0] = ox + (x - ox) * f; PV[1] = oy + (y - oy) * f; pushPath(); AIM[2] = AIM_LINE_LENGTH;
+      }
+      arc += seg0;
+    }
+    if (arc <= AIM_LINE_LENGTH) { PV[0] = x; PV[1] = y; pushPath(); AIM[2] = arc; }
+  }
+  for (; k < CONFIG.AIM_BEND_MAX_STEPS; k++) {
+    t += STEP;
+    BHQ[0] = x; BHQ[1] = y;
+    blackHoleAccelAt(w, ACC2);
+    if (ACC2[0] !== 0 || ACC2[1] !== 0) {
+      vx += ACC2[0] * STEP; vy += ACC2[1] * STEP;
+      sp = Math.sqrt(vx * vx + vy * vy);
+      entered = true;
+    }
+    const ox = x, oy = y;
+    x += vx * STEP; y += vy * STEP;
+    const sx = x - ox, sy = y - oy;
+    const len = Math.sqrt(sx * sx + sy * sy);
+    const ux = len > 0 ? sx / len : 0, uy = len > 0 ? sy / len : 0;
+    // Walls: the aim line never promises anything past a bounce.
+    let stop = (x < WALL_LO && vx < 0) || (x > WALL_HI && vx > 0) || arc + len > AIM_TARGET_RANGE;
+    // Swept body test (advanceFree's), with moving bodies where they will be at time t.
+    let hitT = -1;
+    MT[0] = t;
+    for (let i = 0, n = b.count; i < n; i++) {
+      if (!b.alive[i]) continue;
+      let bx = b.x[i], by = b.y[i];
+      if (b.type[i] === BODY.MOON || (b.flags[i] & MOVING_FLAGS) !== 0) { posAt(b, i); bx = MP[0]; by = MP[1]; }
+      const rr = b.r[i] + cr;
+      const ex = bx - ox, ey = by - oy;
+      let s = ex * ux + ey * uy;
+      s = s < 0 ? 0 : s > len ? len : s;
+      const qx = ux * s - ex, qy = uy * s - ey;
+      const q2 = qx * qx + qy * qy;
+      if (b.type[i] === BODY.BLACKHOLE) {
+        const lim = rr + AIM_CORE_CLEARANCE;
+        if (q2 < lim * lim) { const cl = Math.sqrt(q2) - rr; if (cl < MS[7]) MS[7] = cl; }
+      }
+      if (q2 < rr * rr) {
+        // Contact point along this step (inlined ray-circle entry), as advanceFree places it.
+        const fx = ox - bx, fy = oy - by, fd = fx * ux + fy * uy, cc = fx * fx + fy * fy - rr * rr;
+        const disc = fd * fd - cc;
+        let th = cc <= 0 ? 0 : disc >= 0 ? -fd - Math.sqrt(disc) : len;
+        if (th > len || th < 0) th = len;
+        if (hitT < 0 || th < hitT) hitT = th;
+      }
+    }
+    if (hitT >= 0) { x = ox + ux * hitT; y = oy + uy * hitT; stop = true; }
+    // Draw: one vertex per step up to AIM_LINE_LENGTH of flight.
+    const seg = hitT >= 0 ? hitT : len;
+    if (arc < AIM_LINE_LENGTH) {
+      if (arc + seg <= AIM_LINE_LENGTH) { PV[0] = x; PV[1] = y; pushPath(); AIM[2] = arc + seg; }
+      else { const f = AIM_LINE_LENGTH - arc; PV[0] = ox + ux * f; PV[1] = oy + uy * f; pushPath(); AIM[2] = AIM_LINE_LENGTH; }
+    }
+    arc += seg;
+    if (stop) { MS[6] = arc; return false; }
+    // Pass bookkeeping and slingshot boost, exactly as advanceFree.
+    let inside = false;
+    for (let i = 0, n = b.count; i < n; i++) {
+      if (!b.alive[i] || b.type[i] !== BODY.BLACKHOLE) continue;
+      const dx = x - b.x[i], dy = y - b.y[i];
+      const d2 = dx * dx + dy * dy, d = Math.sqrt(d2);
+      const rc = b.rc[i];
+      if (d2 <= rc * rc) inside = true;
+      if (d < rc) {
+        if (bhId !== b.id[i]) { bhId = b.id[i]; bhMin = d; entered = true; }
+        else if (d < bhMin) bhMin = d;
+      } else if (bhId !== 0 && bhId === b.id[i]) {
+        bhId = 0;
+        SL[0] = bhMin;
+        slingScale(b, i);
+        let ns = sp * (1 + (CONFIG.BLACKHOLE_SPEED_BOOST - 1) * SL[1]);
+        const cap = w.baseSpeed * CONFIG.SPEED_CAP_FACTOR * CONFIG.BLACKHOLE_SPEED_BOOST;
+        if (ns > cap) ns = cap;
+        if (ns > sp && sp > 0) { const kk = ns / sp; vx *= kk; vy *= kk; sp = ns; }
+      }
+    }
+    if (!inside && bhId === 0 && (entered || arc > passBy)) {
+      // Out of every influence: hand over to the next straight leg.
+      MS[0] = x; MS[1] = y; MS[2] = vx; MS[3] = vy; MS[4] = sp; MS[5] = t; MS[6] = arc;
+      RAY[0] = x; RAY[1] = y; RAY[2] = vx / sp; RAY[3] = vy / sp; RAY[4] = sp; RAY[5] = t;
+      return true;
+    }
+  }
+  MS[6] = arc;
+  return false;
 }
 
 /**
@@ -711,14 +1042,25 @@ function castAim(w, exclude) {
  * body where it will be when the comet gets there. Reads and updates MV (hit, ring entry, deep
  * point, limit); returns true if i became the target (its ring is entered before the current one).
  * All doubles stay in typed arrays and locals of this small function, which V8 optimises on its own.
+ *
+ * The hit test keeps a margin (Phase 4): free flight tests each step's path against where a moving
+ * body is at the END of the step (advanceFree), which can be up to one step of the body's motion
+ * nearer than the true relative path; and the samples are AIM_MARCH_STEP apart, so the closest
+ * approach can fall between two of them (by at most the sagitta of half a sample spacing of the
+ * relative motion, on the hit circle). A line grazing a fast body (a binary partner turning at
+ * ~230 u/s) used to light, and a release on it died ~2 units short (seeds 104 and 145, zones 5 and
+ * 6, perfect bot). Where a sample is inside, the hit distance is refined to the circle entry
+ * around the body's position at that sample (exact for a body that does not move).
  * @param {import('../contracts.js').Bodies} b @param {number} i
  */
 function marchMoving(b, i) {
   const ox = RAY[0], oy = RAY[1], dx = RAY[2], dy = RAY[3];
   const sp = RAY[4] > 1 ? RAY[4] : 1, t0 = RAY[5];
   const rc = b.rc[i];
-  const isPl = b.type[i] === BODY.PLANET && rc > 0;
-  const hr = b.r[i] + COMET_RADIUS;
+  const isPl = b.type[i] === BODY.PLANET && rc > 0 && i !== AIMP[0];
+  maxSpeedOf(b, i);
+  const vb = VS[0], h0 = b.r[i] + COMET_RADIUS, half = AIM_MARCH_STEP * 0.5 * (1 + vb / sp);
+  const hr = h0 + vb * STEP + (half * half) / (2 * h0) + 0.05;
   // Bounding circle of everything this body (or its ring) can ever cover.
   envelopeOf(b, i);
   const ex = (ENV[0] + ENV[2]) * 0.5, ey = (ENV[1] + ENV[3]) * 0.5;
@@ -741,7 +1083,17 @@ function marchMoving(b, i) {
     posAt(b, i);
     const qx = ox + dx * s - MP[0], qy = oy + dy * s - MP[1];
     const d2 = qx * qx + qy * qy;
-    if (d2 < hr2) { if (s < MV[0]) MV[0] = s; break; }
+    if (d2 < hr2) {
+      // Entry into the hit circle around the body where it is at this sample, kept within the
+      // last sample spacing (the previous sample was outside).
+      const fd = qx * dx + qy * dy - s, disc = fd * fd - ((ox - MP[0]) * (ox - MP[0]) + (oy - MP[1]) * (oy - MP[1]) - hr2);
+      let th = disc >= 0 ? -fd - Math.sqrt(disc) : s;
+      if (th > s) th = s;
+      if (th < s - AIM_MARCH_STEP) th = s - AIM_MARCH_STEP;
+      if (th < 0) th = 0;
+      if (th < MV[0]) MV[0] = th;
+      break;
+    }
     if (isPl) {
       if (entered < 0 && d2 < rc2) entered = s;
       if (d2 < deep2) {
@@ -783,12 +1135,15 @@ function solveAim(w) {
   const dx = c.vx / sp, dy = c.vy / sp;
   const ox = c.x, oy = c.y, ex = c.body;
   AIM[0] = dx; AIM[1] = dy;
+  // castAim moves RAY along a bent flight, so every cast below starts from a fresh RAY.
+  const time = RAY[5];
   RAY[0] = ox; RAY[1] = oy; RAY[2] = dx; RAY[3] = dy; RAY[4] = sp;
   const t0 = castAim(w, ex);
   if (t0 >= 0) return t0;
   let best = -1, bestD = AIM_ASSIST_RANGE;
+  const ep = ex >= 0 ? partnerOf(b, ex) : -1;
   for (let i = 0, n = b.count; i < n; i++) {
-    if (!b.alive[i] || i === ex || b.type[i] !== BODY.PLANET || b.rc[i] <= 0) continue;
+    if (!b.alive[i] || i === ex || i === ep || b.type[i] !== BODY.PLANET || b.rc[i] <= 0) continue;
     const rx = b.x[i] - ox, ry = b.y[i] - oy;
     if (rx * dx + ry * dy <= 0) continue;
     const d = Math.sqrt(rx * rx + ry * ry);
@@ -808,9 +1163,14 @@ function solveAim(w) {
   if (ang < 0) rot = -rot;
   const cr = Math.cos(rot), sr = Math.sin(rot);
   const ndx = dx * cr - dy * sr, ndy = dx * sr + dy * cr;
-  RAY[2] = ndx; RAY[3] = ndy;
+  RAY[0] = ox; RAY[1] = oy; RAY[2] = ndx; RAY[3] = ndy; RAY[4] = sp; RAY[5] = time;
   const t1 = castAim(w, ex);
-  if (t1 < 0) { RAY[2] = dx; RAY[3] = dy; castAim(w, ex); return -1; } // assist found nothing clean: keep the raw tangent
+  if (t1 < 0) {
+    // Assist found nothing clean: keep the raw tangent (re-cast so AIM[2] and the path match it).
+    RAY[0] = ox; RAY[1] = oy; RAY[2] = dx; RAY[3] = dy; RAY[4] = sp; RAY[5] = time;
+    castAim(w, ex);
+    return -1;
+  }
   AIM[0] = ndx; AIM[1] = ndy;
   return t1;
 }
@@ -819,7 +1179,7 @@ function solveAim(w) {
 function computeAim(w) {
   const a = w.aim, c = w.comet;
   if (c.state !== COMET.ORBIT || w.dead) {
-    a.active = false; a.target = -1; a.clear = false; a.length = 0;
+    a.active = false; a.target = -1; a.clear = false; a.length = 0; a.pointCount = 0;
     return;
   }
   RAY[5] = w.time; // the comet is at its orbit position now; a release next step flies from here
@@ -829,6 +1189,9 @@ function computeAim(w) {
   a.dx = AIM[0]; a.dy = AIM[1]; a.length = AIM[2];
   a.target = t;
   a.clear = t >= 0;
+  const n = PATH_N[0], pts = a.points;
+  for (let k = 0, m = 2 * n; k < m; k++) pts[k] = PATH[k];
+  a.pointCount = n;
 }
 
 // ================================================================ hash

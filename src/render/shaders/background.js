@@ -139,6 +139,9 @@ vec3 stars(vec2 pos, float cell, uint seed, float density, float radiusPx, float
   vec2 g = pos / cell;
   ivec2 c = ivec2(floor(g));
   vec2 f = g - floor(g);
+  // The y offset wraps every 1024 cells (in JS); wrap the hashed row index with it so the
+  // starfield is periodic in exactly that span and never reshuffles at the wrap.
+  c.y &= 1023;
   uint h = hash2(c, seed);
   if (u2f(h) > density) return vec3(0.0);
   uint h2 = pcg(h), h3 = pcg(h2), h4 = pcg(h3), h5 = pcg(h4);

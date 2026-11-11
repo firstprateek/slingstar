@@ -53,30 +53,33 @@ test('moon: moves with its parent; a decaying orbit that reaches the moon lane d
 
 test('aim line predicts moon motion: a moon that will have moved away does not block, one that will swing in does', () => {
   // Ray straight up from (500, 3000) at 1000 u/s; target ring ahead; a moon circling a small body
-  // off to the right crosses x = 500 only at angle π (point (500, 3300)), which the comet reaches at t = 0.3 s.
+  // off to the right crosses x = 500 only at angle π (point (500, 3500)), which the comet reaches at t = 0.5 s.
+  // (Phase 4: the crossing moved from (500, 3300) to (500, 3500). The aim line now keeps a margin of
+  // one step of a moving body's motion, 7.5 units for this 900 u/s moon, and in the old layout the
+  // departing moon still passed only 7 units from contact.)
   const build = (phase) => {
     const w = emptyWorld();
-    const t = addPlanet(w, 500, 3800, 60, 250);
-    const q = addPlanet(w, 800, 3300, 10, 0);
+    const t = addPlanet(w, 500, 4000, 60, 250);
+    const q = addPlanet(w, 800, 3500, 10, 0);
     const m = addMoon(w, q, 300, 3, phase, 18);
     return { w, t, m };
   };
-  // A: the moon sits on the ray now (at (500, 3300)) but is long gone when the comet gets there.
+  // A: the moon sits on the ray now (at (500, 3500)) but is long gone when the comet gets there.
   const A = build(Math.PI);
   near(A.w.bodies.x[A.m], 500, 1e-9, 'moon currently on the ray');
   assert.equal(castRay(A.w, 500, 3000, 0, 1, 1000, A.w.time, -1), A.t, 'clear: the moon will have moved');
   setFree(A.w, 500, 3000, 0, 1000);
   const dA = driver(A.w);
-  for (let k = 0; k < 90 && A.w.comet.state === COMET.FREE; k++) dA.step(true);
+  for (let k = 0; k < 120 && A.w.comet.state === COMET.FREE; k++) dA.step(true);
   assert.equal(A.w.dead, false);
   assert.equal(A.w.comet.body, A.t, 'and the flight really reaches the target');
 
-  // B: the moon is off the ray now but arrives at (500, 3300) exactly when the comet does.
-  const B = build(Math.PI - 0.9);
+  // B: the moon is off the ray now but arrives at (500, 3500) exactly when the comet does.
+  const B = build(Math.PI - 1.5);
   assert.ok(Math.abs(B.w.bodies.x[B.m] - 500) > 100, 'moon currently well off the ray');
   assert.equal(castRay(B.w, 500, 3000, 0, 1, 1000, B.w.time, -1), -1, 'blocked: the moon will be there');
   setFree(B.w, 500, 3000, 0, 1000);
-  const evB = driver(B.w).run(false, 60);
+  const evB = driver(B.w).run(false, 90);
   const death = ofType(evB, EV.DEATH);
   assert.equal(death.length, 1, 'and the flight really meets the moon');
   assert.equal(death[0].a, DEATH_CAUSE.MOON);
@@ -135,7 +138,9 @@ test('black hole: cannot be orbited (a press inside the influence only arms); th
   assert.ok(Math.hypot(w.comet.x - 500, w.comet.y - 3000) <= CONFIG.BLACKHOLE_CORE_RADIUS + CONFIG.COMET_RADIUS + 1e-6);
 });
 
-test('black hole: surviving a deep pass pays the slingshot (EV.SLINGSHOT, 250 × multiplier, ×1.12 speed); a shallow pass does not', () => {
+// Phase 4 (PLAN §2.5: "passing through the influence zone and surviving pays"): a shallow pass used
+// to pay nothing; it now pays a smaller slingshot, scaled by depth.
+test('black hole: surviving a deep pass pays the full slingshot (EV.SLINGSHOT, 250 × multiplier, ×1.12 speed); a shallow pass pays less', () => {
   const w = emptyWorld();
   const h = addBlackHole(w, 500, 3000);
   setFree(w, 680, 2500, 0, 800);
@@ -164,17 +169,106 @@ test('black hole: surviving a deep pass pays the slingshot (EV.SLINGSHOT, 250 ×
   addBlackHole(w2, 500, 3000);
   setFree(w2, 500 + 0.8 * CONFIG.BLACKHOLE_INFLUENCE_RADIUS + 40, 2500, 0, 800);
   const ev2 = driver(w2).run(false, 240);
-  assert.equal(ofType(ev2, EV.SLINGSHOT).length, 0);
+  const s2 = ofType(ev2, EV.SLINGSHOT);
+  assert.equal(s2.length, 1, 'any survived pass pays');
+  const full = CONFIG.BLACKHOLE_SLINGSHOT_POINTS;
+  assert.ok(s2[0].b >= Math.round(full * CONFIG.BLACKHOLE_SLINGSHOT_MIN_SCALE) && s2[0].b < full, `shallow pays less: ${s2[0].b}`);
   assert.equal(w2.dead, false);
-  near(w2.comet.speed, 800, 5);
+  assert.ok(w2.comet.speed > 800 * 1.01 && w2.comet.speed < 800 * CONFIG.BLACKHOLE_SPEED_BOOST - 5, `smaller boost: ${w2.comet.speed}`);
+
+  // A slot with no id (0 = "no pass") never pays.
+  const w3 = emptyWorld();
+  const h3 = addBlackHole(w3, 500, 3000);
+  w3.bodies.id[h3] = 0;
+  setFree(w3, 100, 1000, 0, 800);
+  assert.equal(ofType(driver(w3).run(false, 60), EV.SLINGSHOT).length, 0);
 });
 
-test('black hole: the aim line never lights through an influence radius', () => {
+// Phase 4: the aim line used to go dark at any influence radius, so slingshots were an unreadable
+// gamble. It now forecasts the bent flight exactly and lights a ring that flight really enters.
+test('black hole: the aim line follows the bent flight and lights a ring only if that flight enters it', () => {
+  const fly = (w, ox, oy, sp) => {
+    setFree(w, ox, oy, 0, sp);
+    const d = driver(w);
+    d.step(true);
+    for (let k = 0; k < 600 && w.comet.state === COMET.FREE && !w.dead; k++) d.step(true);
+    return w.dead ? -2 : w.comet.state === COMET.ORBIT ? w.comet.body : -1;
+  };
+  // A pass that bends the flight but still reaches the ring: lit, and the flight catches it.
   const w = emptyWorld();
-  const t = addPlanet(w, 500, 4000, 60, 250);
+  const t = addPlanet(w, 560, 4100, 60, 250);
+  addBlackHole(w, 500 + CONFIG.BLACKHOLE_INFLUENCE_RADIUS - 60, 3400);
   assert.equal(castRay(w, 500, 3000, 0, 1, 900, 0, -1), t);
-  addBlackHole(w, 500 + CONFIG.BLACKHOLE_INFLUENCE_RADIUS - 20, 3400); // influence edge 20 over the ray
-  assert.equal(castRay(w, 500, 3000, 0, 1, 900, 0, -1), -1);
+  assert.equal(fly(w, 500, 3000, 900), t);
+  // A ring the straight ray would enter but the bent flight misses: dark (and the flight misses it).
+  const w2 = emptyWorld();
+  const t2 = addPlanet(w2, 380, 4100, 60, 200);
+  assert.equal(castRay(w2, 500, 3000, 0, 1, 900, 0, -1), t2, 'straight, it would be lit');
+  addBlackHole(w2, 500 + CONFIG.BLACKHOLE_INFLUENCE_RADIUS - 60, 3400);
+  assert.equal(castRay(w2, 500, 3000, 0, 1, 900, 0, -1), -1);
+  assert.notEqual(fly(w2, 500, 3000, 900), t2);
+  // A flight into the core: dark.
+  const w3 = emptyWorld();
+  addPlanet(w3, 500, 4100, 60, 250);
+  addBlackHole(w3, 505, 3400);
+  assert.equal(castRay(w3, 500, 3000, 0, 1, 900, 0, -1), -1);
+  assert.equal(fly(w3, 500, 3000, 900), -2);
+});
+
+test('black hole: a release on a lit bent aim line flies exactly along world.aim.points and slingshots into the lit ring', () => {
+  // The comet orbits the home planet (pre-start, so the orbit is exact); try black-hole positions
+  // beside the climb until a lap shows a lit line whose path bends.
+  let found = null;
+  for (let bx = 760; bx <= 960 && !found; bx += 40) {
+    const w = emptyWorld();
+    const t = addPlanet(w, 560, 1500, 80, 260, 1); // path planet 1: the home orbit lets go onto it
+    addBlackHole(w, bx, 780);
+    const d = driver(w);
+    d.step(true);
+    for (let k = 0; k < 240 && !found; k++) {
+      const a = w.aim;
+      if (a.clear && a.pointCount > 2) found = { w, d, t };
+      else d.step(true);
+    }
+  }
+  assert.ok(found, 'a lit bent line exists');
+  const { w, d, t } = found;
+  const a = w.aim, n = a.pointCount;
+  const x0 = a.x0, y0 = a.y0, pts = Array.from(a.points.subarray(0, 2 * n)), drawn = a.length;
+  assert.ok(n > 4);
+  near(Math.hypot(pts[2 * n - 2] - pts[2 * n - 4], pts[2 * n - 1] - pts[2 * n - 3]), w.comet.speed * STEP, w.comet.speed * STEP,
+    'bent part: about a vertex per step');
+  let arc = 0;
+  for (let k = 1; k < n; k++) arc += Math.hypot(pts[2 * k] - pts[2 * k - 2], pts[2 * k + 1] - pts[2 * k - 1]);
+  near(arc, drawn, 1e-2, 'polyline length = aim.length');
+  /** Distance from (px, py) (offsets from the line's start) to the drawn polyline. */
+  const offLine = (px, py) => {
+    let best = Infinity;
+    for (let k = 0; k + 1 < n; k++) {
+      const ax = pts[2 * k], ay = pts[2 * k + 1], dx = pts[2 * k + 2] - ax, dy = pts[2 * k + 3] - ay;
+      const L2 = dx * dx + dy * dy;
+      const u = L2 > 0 ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / L2)) : 0;
+      best = Math.min(best, Math.hypot(px - ax - u * dx, py - ay - u * dy));
+    }
+    return best;
+  };
+  const all = d.step(false); // release on the lit line
+  assert.equal(ofType(all, EV.RELEASE).length, 1);
+  // The flight stays on the drawn path (to float32 precision) and passes through every vertex.
+  const seen = new Uint8Array(n);
+  let flown = Math.hypot(w.comet.x - x0, w.comet.y - y0); // the release step's own move
+  while (flown < drawn - 1) {
+    const px = w.comet.x - x0, py = w.comet.y - y0;
+    assert.ok(offLine(px, py) < 1e-3, `on the drawn path at ${flown.toFixed(1)}`);
+    for (let k = 0; k < n; k++) if (Math.hypot(px - pts[2 * k], py - pts[2 * k + 1]) < 1e-3) seen[k] = 1;
+    const ev = d.step(flown > 200);
+    all.push(...ev);
+    flown += Math.hypot(w.comet.x - w.comet.px, w.comet.y - w.comet.py);
+  }
+  for (let k = 1; k < n - 1; k++) assert.equal(seen[k], 1, `vertex ${k} of ${n} is on the flight`);
+  for (let k = 0; k < 600 && w.comet.state === COMET.FREE; k++) all.push(...d.step(true));
+  assert.equal(w.comet.body, t, 'caught the lit planet');
+  assert.equal(ofType(all, EV.SLINGSHOT).length, 1, 'and slingshot on the way');
 });
 
 // ------------------------------------------------------------------ drifting planets

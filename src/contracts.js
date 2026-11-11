@@ -29,7 +29,7 @@ export const BODY = Object.freeze({
 export const BODY_FLAG = Object.freeze({
   RINGED: 1,     // render a planetary ring (visual only)
   DRIFTING: 2,   // oscillates sideways: x = baseX + amp * sin(2π t / period + phase)
-  BINARY: 4,     // circles `parent`'s shared centre (cx, cy) with its partner
+  BINARY: 4,     // one member of a binary pair: circles the pair's shared centre (m3, m4) opposite its partner (`parent`)
   HOME: 8,       // the home planet the run starts on
 });
 
@@ -133,11 +133,20 @@ export const STORAGE = Object.freeze({
  * @property {Uint32Array} seed      Per-body visual seed (style, bands, colours, ring tilt).
  * @property {Uint8Array} zone       Zone (1-based) the body was generated in; picks the palette.
  * @property {Int32Array} pathIndex  Order along the path (0 = home), -1 for hazards / side bodies.
- * @property {Int32Array} parent     MOON: slot index of its planet. BINARY: slot of its partner. Else -1.
+ * @property {Int32Array} parent     MOON: slot index of its planet. BINARY: slot of its partner (the
+ *                                   partners point at each other; -1 once the partner is recycled). Else -1.
  * Motion params (position is a pure function of world.time, so it is deterministic):
  *   DRIFTING:  x = m0 + m1 * sin(2π t / m2 + m3)            (m0 baseX, m1 amplitude, m2 period s, m3 phase)
  *   MOON:      pos = parent pos + m0 * (cos θ, sin θ), θ = m2 + m1 t   (m0 orbit r, m1 rad/s signed, m2 phase)
  *   BINARY:    pos = (m3, m4) + m0 * (cos θ, sin θ), θ = m2 + m1 t     (partner has phase + π)
+ * Binary pairs (Phase 4): two real PLANET slots, both flagged BINARY, with the same m0, m1, m3, m4,
+ * phases m2 π apart, `parent` pointing at each other and the SAME pathIndex: catching either member
+ * is catching that path step (the other is then no new planet: catching it neither scores nor
+ * changes the combo, and it never counts as re-catching the planet just left). Each has its own
+ * radius, capture ring, seed and RINGED flag. From one member the aim line looks
+ * past the partner's ring (not a target) but its body blocks the line; after a release on a lit
+ * line the partner cannot be latched until the flight bends or bounces. The partner can hide the
+ * next planet for up to CONFIG.BINARY_MAX_WAIT_S of the pair's turn (the generator guarantees it).
  * @property {Float64Array} m0
  * @property {Float64Array} m1
  * @property {Float64Array} m2
@@ -184,14 +193,28 @@ export const STORAGE = Object.freeze({
  * @property {boolean} active
  * @property {number} x0             Start (comet position).
  * @property {number} y0
- * @property {number} dx             Unit direction (tangent, after aim assist).
+ * @property {number} dx             Unit direction at the start (tangent, after aim assist) = release heading.
  * @property {number} dy
- * @property {number} length         Drawn length: AIM_LINE_LENGTH, or shorter if the flight would hit a
- *                                   body (moons, drifting and binary planets at their PREDICTED positions
- *                                   when the comet gets there) or enter a black hole's influence radius
- *                                   (the line never lights through one).
- * @property {number} target         Slot index of the planet whose ring the ray enters cleanly within
- *                                   CONFIG.AIM_TARGET_RANGE (not limited to the drawn length), else -1.
+ * @property {number} length         Drawn length, measured ALONG the path (arc length): AIM_LINE_LENGTH of
+ *                                   flight, or shorter if the flight would hit a body (moons, drifting and
+ *                                   binary planets at their PREDICTED positions when the comet gets there,
+ *                                   black-hole cores) — the end of `points`.
+ * @property {Float32Array} points   The drawn path as a polyline (Phase 4). Preallocated, length
+ *                                   2 × CONFIG.AIM_PATH_MAX_POINTS, interleaved [x, y, x, y, …]; each vertex
+ *                                   is an OFFSET in world units from (x0, y0) (so vertex 0 is always (0, 0)).
+ *                                   Only the first `pointCount` vertices are valid; the rest is stale.
+ *                                   Free flight is straight except inside a black hole's influence radius,
+ *                                   where the sim forecasts the bent path exactly (same fixed step and
+ *                                   pull as the flight): a straight line is 2 vertices (start, end); a bent
+ *                                   one has a vertex per sim step through the influence (~6–13 units
+ *                                   apart). The polyline's total length is `length`. Draw dots along it.
+ * @property {number} pointCount     Valid vertices in `points`: >= 2 while `active`, 0 otherwise.
+ * @property {number} target         Slot index of the planet whose ring the forecast flight ENTERS cleanly
+ *                                   at least CONFIG.AIM_MIN_ENTRY_S after a release (sooner, or already
+ *                                   inside it, only if a latch anywhere until AIM_SAFE_PRESS_S is safe)
+ *                                   within CONFIG.AIM_TARGET_RANGE
+ *                                   of flight (not limited to the drawn length), else -1. Through a black
+ *                                   hole's influence this follows the bent path (a lit slingshot).
  * @property {boolean} clear         true when `target >= 0` — draw the line and that ring in the accent colour.
  */
 
@@ -235,7 +258,11 @@ export const STORAGE = Object.freeze({
  * @property {number} steps          Steps since reset.
  * @property {boolean} started       false until the first release from the home planet. While
  *                                   false the home orbit neither decays nor speeds up, the front is
- *                                   still, and the comet stays latched with or without a hold.
+ *                                   still, and the comet stays latched with or without a hold. A
+ *                                   release lets go only on a step where the aim line is lit onto a
+ *                                   path planet; otherwise it is queued until the line lights
+ *                                   (holding again cancels it), so the RELEASE event can come up to
+ *                                   ~1.6 s after the finger lifts.
  * @property {boolean} dead          Set on death; the world keeps stepping (bodies move) but the comet is inert.
  * @property {number} deathTime      world.time at death, or -1.
  * @property {number} baseSpeed      Current base speed (rises with zone).

@@ -90,8 +90,12 @@ export function updateCamera(cam, world, alpha, dt, aspect, time, reducedMotion)
   cam.lookX += (cam.cometVx * la - cam.lookX) * kl;
   cam.lookY += (cam.cometVy * la - cam.lookY) * kl;
 
-  // Comet sits CAMERA_COMET_SCREEN_Y up the screen → view centre is (0.5 - that) × viewH above it.
-  const targetY = cam.cometY + cam.lookY * 0.8 + (0.5 - CONFIG.CAMERA_COMET_SCREEN_Y) * cam.viewH;
+  // Comet sits CAMERA_COMET_SCREEN_Y up the screen on average → view centre is (0.5 - that) × viewH
+  // above it. The look-ahead moves it from there, measured from its typical value in play (the
+  // look-ahead of a climb straight up at the zone's base speed) rather than added on top (Phase 4:
+  // the comet sat ~25% up, lower as zones sped up). The title / home orbit has no climb to fold.
+  const lookRef = world.started ? world.baseSpeed * la : 0;
+  const targetY = cam.cometY + (cam.lookY - lookRef) * 0.8 + (0.5 - CONFIG.CAMERA_COMET_SCREEN_Y) * cam.viewH;
   if (!cam.snapped || Math.abs(targetY - cam.y) > 4000) {
     cam.y = targetY; cam.vy = cam.cometVy; cam.snapped = true;
   } else {
