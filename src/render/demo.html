@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <meta name="color-scheme" content="dark">
+  <title>Slingstar render demo</title>
+  <style>
+    html, body { position: fixed; inset: 0; margin: 0; overflow: hidden; background: #05060f;
+      overscroll-behavior: none; touch-action: none; -webkit-user-select: none; user-select: none; }
+    canvas { position: absolute; inset: 0; width: 100%; height: 100dvh; display: block; }
+    #hud { position: absolute; left: 0; right: 0; top: calc(env(safe-area-inset-top) + 14px);
+      text-align: center; color: #fff; font: 700 34px/1 ui-rounded, -apple-system, system-ui, sans-serif;
+      letter-spacing: 0.02em; pointer-events: none; text-shadow: 0 1px 8px rgba(0,0,0,0.35); }
+    #hud small { display: block; margin-top: 6px; font-size: 15px; font-weight: 600; opacity: 0.8; }
+    #stats { position: absolute; left: 8px; bottom: calc(env(safe-area-inset-bottom) + 8px);
+      color: #9fb; font: 11px/1.3 ui-monospace, Menlo, monospace; white-space: pre; pointer-events: none;
+      text-shadow: 0 0 3px #000; }
+  </style>
+</head>
+<body>
+  <canvas id="c"></canvas>
+  <div id="hud"><span id="score">0</span><small id="sub">×1 · combo 0</small></div>
+  <div id="stats" hidden></div>
+  <script type="module" src="./demo-world.js"></script>
+</body>
+</html>

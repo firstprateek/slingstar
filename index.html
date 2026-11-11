@@ -7,17 +7,22 @@
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Slingstar">
+  <meta name="format-detection" content="telephone=no">
   <meta name="theme-color" content="#05060f">
+  <meta name="color-scheme" content="dark">
   <title>Slingstar</title>
   <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" type="image/svg+xml" href="icons/icon.svg">
   <link rel="apple-touch-icon" href="icons/icon-180.png">
   <link rel="stylesheet" href="css/app.css">
 </head>
 <body>
   <canvas id="game"></canvas>
-  <div id="hud"></div>
+  <div id="hud" aria-live="off"></div>
   <div id="screens"></div>
-  <div id="debug"></div>
+  <div id="debug" hidden></div>
+  <div id="boot" aria-hidden="true"><div class="boot-mark">SLINGSTAR</div><div class="boot-dot"></div></div>
+  <noscript><p class="noscript">Slingstar needs JavaScript.</p></noscript>
   <script type="module" src="src/main.js"></script>
 </body>
 </html>

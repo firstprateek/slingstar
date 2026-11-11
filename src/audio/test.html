@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Slingstar audio test</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; padding: 16px; background: #05060f; color: #dfe8ff;
+    font: 14px/1.4 ui-rounded, -apple-system, system-ui, sans-serif; }
+  h1 { font-size: 18px; margin: 0 0 8px; }
+  h2 { font-size: 13px; margin: 16px 0 6px; color: #6fe3ff; text-transform: uppercase; letter-spacing: .06em; }
+  .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  button, select { font: inherit; color: inherit; background: #141a33; border: 1px solid #2c3766;
+    border-radius: 8px; padding: 8px 10px; min-height: 36px; }
+  button[aria-pressed="true"] { background: #1f6a80; border-color: #6fe3ff; }
+  button:active { background: #24305e; }
+  #unlock { background: #1f6a80; border-color: #6fe3ff; font-weight: 600; }
+  #status { font-variant-numeric: tabular-nums; color: #9fb0d8; margin-top: 6px; }
+  table { border-collapse: collapse; font-size: 12px; margin-top: 8px; font-variant-numeric: tabular-nums; }
+  td, th { padding: 2px 8px; border-bottom: 1px solid #1d2547; text-align: right; }
+  td:first-child, th:first-child { text-align: left; }
+  .bad { color: #ff6a6a; }
+</style>
+</head>
+<body>
+<h1>Slingstar audio test</h1>
+<div class="row">
+  <button id="unlock">Unlock audio</button>
+  <button id="sound" aria-pressed="true">Sound on</button>
+  <button id="suspend">Suspend</button>
+  <button id="resume">Resume</button>
+  <button id="reset">Reset run</button>
+</div>
+<div id="status">state: none</div>
+
+<h2>Sound effects</h2>
+<div class="row" id="sfx"></div>
+
+<h2>Tier (music layers)</h2>
+<div class="row" id="tiers"></div>
+
+<h2>Zone (key)</h2>
+<div class="row" id="zones"></div>
+
+<h2>Scene</h2>
+<div class="row" id="scenes"></div>
+
+<h2>Graze loop</h2>
+<div class="row"><button id="graze" aria-pressed="false">Graze off</button></div>
+
+<h2>Levels (OfflineAudioContext)</h2>
+<div class="row"><button id="measure">Measure all</button></div>
+<div id="levels"></div>
+
+<script type="module" src="./test.js"></script>
+</body>
+</html>

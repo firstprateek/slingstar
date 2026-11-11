@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#05060f">
+  <title>Slingstar shell demo</title>
+  <link rel="stylesheet" href="../../css/app.css">
+  <style>
+    /* Demo-only control strip (?controls=1). */
+    #demo-controls {
+      position: absolute; left: 0; right: 0; bottom: calc(env(safe-area-inset-bottom, 0px) + 4px); z-index: 5;
+      display: flex; flex-wrap: wrap; justify-content: center; gap: 4px; padding: 0 6px;
+    }
+    #demo-controls button {
+      min-height: 30px; padding: 0 8px; border-radius: 8px; border: 1px solid rgba(255,255,255,.25);
+      background: rgba(0,0,0,.55); color: #fff; font: 600 11px ui-monospace, Menlo, monospace;
+    }
+    #demo-held {
+      position: absolute; right: 8px; top: calc(env(safe-area-inset-top, 0px) + 60px); z-index: 5;
+      font: 700 11px ui-monospace, Menlo, monospace; color: #fff; background: rgba(0,0,0,.55);
+      padding: 3px 6px; border-radius: 6px; pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="game"></canvas>
+  <div id="hud"></div>
+  <div id="screens"></div>
+  <div id="debug" hidden></div>
+  <div id="boot" aria-hidden="true"><div class="boot-mark">SLINGSTAR</div><div class="boot-dot"></div></div>
+  <script type="module" src="demo.js"></script>
+</body>
+</html>

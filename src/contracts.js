@@ -187,7 +187,8 @@ export const STORAGE = Object.freeze({
  * @property {number} dx             Unit direction (tangent, after aim assist).
  * @property {number} dy
  * @property {number} length         Drawn length: AIM_LINE_LENGTH, or shorter if it hits a body.
- * @property {number} target         Slot index of the planet whose ring the ray enters cleanly, else -1.
+ * @property {number} target         Slot index of the planet whose ring the ray enters cleanly within
+ *                                   CONFIG.AIM_TARGET_RANGE (not limited to the drawn length), else -1.
  * @property {boolean} clear         true when `target >= 0` — draw the line and that ring in the accent colour.
  */
 
@@ -214,6 +215,7 @@ export const STORAGE = Object.freeze({
 
 /**
  * @typedef {Object} EventQueue  Preallocated; capacity 128; extra events in a step are dropped.
+ *   The sim only appends; the consumer (main.js) must zero `count` once per frame after dispatch.
  * @property {number} count
  * @property {Uint8Array} type       EV.*
  * @property {Float64Array} x
@@ -270,7 +272,10 @@ export const STORAGE = Object.freeze({
 
 /**
  * @typedef {Object} Renderer  src/render/renderer.js `createRenderer(canvas, opts)`.
- *   opts: { renderScale?: number, reducedMotion?: boolean, onRenderScale?: (s: number) => void }
+ *   opts: { renderScale?: number, reducedMotion?: boolean, onRenderScale?: (s: number) => void, adaptive?: boolean }
+ *   adaptive (default true): false pins renderScale (demo/tests).
+ *   draw() never reads layout; main.js must call resize() on window resize / orientation change /
+ *   visualViewport resize. Call resetRun(world) after every world.reset().
  * @property {(world: WorldT, alpha: number, dtReal: number) => void} draw  Interpolated draw (alpha 0..1).
  * @property {(type: number, x: number, y: number, a: number, b: number) => void} onEvent  Effects (particles, shake, ring pulse).
  * @property {() => void} resize     Call on window resize / orientation change.
@@ -347,6 +352,9 @@ export const STORAGE = Object.freeze({
 
 /**
  * @typedef {Object} ScreenHandlers  Callbacks main.js gives to ui/screens.js.
+ *   The GAMEOVER overlay ('tap anywhere') calls onRestart and the RESUME overlay calls onResume
+ *   themselves, via click on a data-ui overlay; main.js must not also restart or resume from input
+ *   edges on those screens.
  * @property {(mode: string) => void} onMode
  * @property {(on: boolean) => void} onSound
  * @property {() => void} onPause
@@ -369,6 +377,8 @@ export const STORAGE = Object.freeze({
 /**
  * @typedef {Object} Lifecycle  src/platform/lifecycle.js `createLifecycle(handlers)`.
  *   handlers: { onHide: () => void, onShow: () => void, onOrientation: (landscape: boolean) => void }
+ *   onOrientation fires only on change, plus once in a microtask at startup if the page opens in
+ *   landscape. Landscape only counts on a touch-first device ((hover: none) and (pointer: coarse)).
  * @property {boolean} hidden
  * @property {boolean} landscape
  */

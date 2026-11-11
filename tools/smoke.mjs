@@ -74,6 +74,12 @@ function watch(page, label) {
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const shot = async (page, name) => { const b = await page.screenshot({ path: path.join(OUT, name) }); return b; };
+/** Screenshot with #boot, #screens, #hud and #debug hidden, so only the WebGL canvas is measured. */
+async function canvasOnly(page) {
+  await page.evaluate(() => { for (const id of ['boot', 'screens', 'hud', 'debug']) { const e = document.getElementById(id); if (e) e.style.visibility = 'hidden'; } });
+  try { return await page.screenshot(); }
+  finally { await page.evaluate(() => { for (const id of ['boot', 'screens', 'hud', 'debug']) { const e = document.getElementById(id); if (e) e.style.visibility = ''; } }); }
+}
 
 try {
   // ------------------------------------------------------------ 1. title
@@ -84,8 +90,13 @@ try {
   const titleShot = await shot(page, 'title.png');
   const hasGl2 = await page.evaluate(() => !!(window.__slingstar.stats && document.getElementById('game').getContext('webgl2')));
   check('WebGL2 context exists', hasGl2);
-  const ts = imageStats(titleShot);
+  // Measure the canvas itself: hide the DOM overlays (boot splash, screens, HUD) for one capture so
+  // their glowing text can't make a blank canvas look rendered.
+  const canvasShot = await canvasOnly(page);
+  const ts = imageStats(canvasShot);
   check('title canvas not blank', ts.colours > 20 && ts.max > 60, `colours=${ts.colours} max=${ts.max.toFixed(0)}`);
+  check('boot splash dismissed (main showed a screen)', await page.evaluate(() => document.getElementById('boot') === null));
+  void titleShot;
 
   if (!SKIP_GAMEPLAY) {
     // ------------------------------------------------------------ 2. autoplay run
@@ -96,8 +107,8 @@ try {
     const st = await play.evaluate(() => ({ score: window.__slingstar.world.score.score, draws: window.__slingstar.stats.drawCalls, zone: window.__slingstar.world.score.zone, screen: window.__slingstar.screen }));
     check('score > 0 after 10s autoplay', st.score > 0, `score=${st.score} screen=${st.screen}`);
     check('draw calls < 20', st.draws > 0 && st.draws < 20, `drawCalls=${st.draws}`);
-    const playShot = await shot(play, 'play.png');
-    const ps = imageStats(playShot);
+    await shot(play, 'play.png');
+    const ps = imageStats(await canvasOnly(play));
     check('play canvas not blank', ps.colours > 30 && ps.max > 120, `colours=${ps.colours} max=${ps.max.toFixed(0)} bright=${(ps.brightFrac * 100).toFixed(1)}%`);
     // zone 2+ moment
     try {
@@ -118,8 +129,12 @@ try {
     // Long press via dispatched touch + pointer events (Playwright has no touch-hold API).
     const prevented = await tp.evaluate(() => {
       const c = document.getElementById('game');
-      const t = new Touch({ identifier: 1, target: c, clientX: 195, clientY: 600 });
-      const ev = new TouchEvent('touchstart', { touches: [t], targetTouches: [t], changedTouches: [t], bubbles: true, cancelable: true });
+      // Playwright's macOS WebKit has no Touch constructor; fall back to a TouchEvent without lists.
+      let ev;
+      try {
+        const t = new Touch({ identifier: 1, target: c, clientX: 195, clientY: 600 });
+        ev = new TouchEvent('touchstart', { touches: [t], targetTouches: [t], changedTouches: [t], bubbles: true, cancelable: true });
+      } catch { ev = new TouchEvent('touchstart', { bubbles: true, cancelable: true }); }
       c.dispatchEvent(ev);
       c.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 1, pointerType: 'touch', clientX: 195, clientY: 600, bubbles: true, cancelable: true, isPrimary: true, buttons: 1 }));
       return ev.defaultPrevented;
@@ -130,8 +145,12 @@ try {
     check('no scroll, zoom or selection during hold', scroll.sy === 0 && scroll.sx === 0 && scroll.scale === 1 && scroll.sel === '', JSON.stringify(scroll));
     await tp.evaluate(() => {
       const c = document.getElementById('game');
-      const t = new Touch({ identifier: 1, target: c, clientX: 195, clientY: 600 });
-      c.dispatchEvent(new TouchEvent('touchend', { touches: [], targetTouches: [], changedTouches: [t], bubbles: true, cancelable: true }));
+      let ev;
+      try {
+        const t = new Touch({ identifier: 1, target: c, clientX: 195, clientY: 600 });
+        ev = new TouchEvent('touchend', { touches: [], targetTouches: [], changedTouches: [t], bubbles: true, cancelable: true });
+      } catch { ev = new TouchEvent('touchend', { bubbles: true, cancelable: true }); }
+      c.dispatchEvent(ev);
       c.dispatchEvent(new PointerEvent('pointerup', { pointerId: 1, pointerType: 'touch', clientX: 195, clientY: 600, bubbles: true, cancelable: true, isPrimary: true }));
     });
     const over = await tp.evaluate(() => window.__slingstar.screen);

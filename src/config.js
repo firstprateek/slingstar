@@ -47,6 +47,11 @@ export const CONFIG = Object.freeze({
   AIM_LINE_LENGTH: 600,
   /** Spacing of the dotted aim line, units. */
   AIM_DOT_SPACING: 24,
+  /** aim.target / aim.clear look this far along the ray (later zones space planets > 600 apart). */
+  AIM_TARGET_RANGE: 2400,
+  /** The aim ray must get this far inside a ring to count as clear; assist aims 1.5× this inside. */
+  AIM_RING_MARGIN: 12,
+  LATCH_EPSILON: 0.5,
 
   // ---------------------------------------------------------------- walls
   WALL_SPEED_LOSS: 0.10,
@@ -114,6 +119,23 @@ export const CONFIG = Object.freeze({
   MOTES_PER_LINE_MAX: 7,
   MOTE_SPACING: 60,
   MOTE_RADIUS: 18,
+  /** Solvability rays must get this far inside B's ring. */
+  SOLVE_RING_MARGIN: 15,
+  /** The window is also required on the orbit at Rc - this (armed latches happen at the ring edge). */
+  SOLVE_OUTER_INSET: 8,
+  /** Max horizontal step between path planets as a fraction of the vertical spacing. */
+  PATH_DX_FRACTION: 0.85,
+  /** Minimum surface-to-surface gap between bodies. */
+  BODY_GAP: 40,
+  SIDE_PLANET_CHANCE: 0.3,
+  SIDE_R_MIN: 45,
+  SIDE_R_MAX: 85,
+  MOTE_LINE_CHANCE: 0.85,
+  MOTE_START: 40,
+  /** Recycle bodies and motes this far below the front. */
+  RECYCLE_BELOW: 300,
+  FALLBACK_SPACING: 600,
+  FALLBACK_R: 70,
   /** Home planet (first path planet, comet starts orbiting it). */
   HOME_X: 500,
   HOME_Y: 0,
@@ -137,6 +159,8 @@ export const CONFIG = Object.freeze({
   NEAR_MISS_DISTANCE: 25,
   NEAR_MISS_TIMESCALE: 0.35,
   NEAR_MISS_DURATION: 0.25,
+  /** A near-miss pass re-arms once the comet is NEAR_MISS_DISTANCE + this from the surface. */
+  NEAR_MISS_HYSTERESIS: 40,
   DEATH_TIMESCALE: 0.15,
   DEATH_DURATION: 0.7,
   DEATH_PARTICLES: 2500,
@@ -144,6 +168,8 @@ export const CONFIG = Object.freeze({
   REDUCED_MOTION_SLOWMO: 0.5,
   CATCH_SHAKE: 6,
   RESTART_MAX_MS: 300,
+  /** Ignore taps on the game-over card for this long so a death-time hold doesn't skip it. */
+  GAMEOVER_TAP_GUARD_MS: 380,
   /** Comet colours per tier ×1..×5 (linear-ish RGB 0..1, may exceed 1 for HDR). */
   TIER_COLORS: Object.freeze([
     Object.freeze([0.75, 0.95, 1.0]),
@@ -182,6 +208,12 @@ export const CONFIG = Object.freeze({
   DEATH_LOWPASS_HZ: 200,
   /** Minor pentatonic intervals in semitones. */
   SCALE: Object.freeze([0, 3, 5, 7, 10]),
+  AUDIO_MASTER_LEVEL: 0.8,
+  AUDIO_LOWPASS_OPEN_HZ: 18000,
+  DEATH_LOWPASS_S: 0.3,
+  DEATH_MUSIC_DUCK: 0.6,
+  AUDIO_MOTE_VOICES: 4,
+  AUDIO_SFX_VOICES: 14,
 });
 
 /**

@@ -46,6 +46,40 @@ export function segmentPointDistance(ox, oy, dx, dy, len, cx, cy) {
   const px = ox + dx * t - cx, py = oy + dy * t - cy;
   return Math.sqrt(px * px + py * py);
 }
+/**
+ * Out-param scratch for the allocation-free helpers below. Read it immediately after the call.
+ * (A double returned from a function V8 does not inline is boxed as a heap number; these helpers
+ * return booleans instead and pass the number through this array, so hot loops allocate nothing.)
+ */
+export const OUT = new Float64Array(2);
+/**
+ * rayCircle without a double return: true if the ray (unit d) reaches the circle, with the entry
+ * distance in OUT[0] (0 when the origin is inside).
+ * @param {number} ox @param {number} oy @param {number} dx @param {number} dy
+ * @param {number} cx @param {number} cy @param {number} r
+ */
+export function rayCircleHit(ox, oy, dx, dy, cx, cy, r) {
+  const fx = ox - cx, fy = oy - cy;
+  const c = fx * fx + fy * fy - r * r;
+  if (c <= 0) { OUT[0] = 0; return true; }
+  const b = fx * dx + fy * dy;
+  if (b > 0) return false;
+  const disc = b * b - c;
+  if (disc < 0) return false;
+  OUT[0] = -b - Math.sqrt(disc);
+  return true;
+}
+/**
+ * True if segment (ox,oy)+t(dx,dy), t in [0,len] (unit d), passes strictly within r of (cx,cy).
+ * @param {number} ox @param {number} oy @param {number} dx @param {number} dy @param {number} len
+ * @param {number} cx @param {number} cy @param {number} r
+ */
+export function segmentWithin(ox, oy, dx, dy, len, cx, cy, r) {
+  let t = (cx - ox) * dx + (cy - oy) * dy;
+  t = t < 0 ? 0 : t > len ? len : t;
+  const px = ox + dx * t - cx, py = oy + dy * t - cy;
+  return px * px + py * py < r * r;
+}
 /** Parse '#rrggbb' to [r,g,b] 0..1 (sRGB). Allocates: call at setup only. @param {string} hex */
 export function hexToRgb(hex) {
   const n = parseInt(hex.slice(1), 16);
