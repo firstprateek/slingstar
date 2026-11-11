@@ -9,6 +9,7 @@
 import { CONFIG } from '../config.js';
 import { mtof, scaleNote, pluckEnv, swellEnv, onEnd, VoicePool } from './graph.js';
 import { zoneRoot } from './music.js';
+import { DEATH_CAUSE } from '../contracts.js';
 
 const MOTE_VOICES = CONFIG.AUDIO_MOTE_VOICES;
 const SFX_VOICES = CONFIG.AUDIO_SFX_VOICES;
@@ -26,7 +27,9 @@ const SCALE = CONFIG.SCALE;
  * @property {(t: number) => void} slingshot
  * @property {(t: number) => void} nearMiss
  * @property {(t: number) => void} comboBreak
- * @property {(t: number) => void} death
+ * @property {(t: number, cause?: number) => void} death   cause = DEATH_CAUSE (black hole adds a swallow)
+ * @property {(level: number, t: number) => void} well   Black-hole gravity drone, level 0..1 (0 stops it).
+ * @property {number} wellLevel
  * @property {(on: boolean, t: number) => void} graze   Start / stop the sizzle loop (idempotent).
  * @property {boolean} grazing
  * @property {(now: number) => number} voices          Active capped voices (debug).
@@ -49,6 +52,14 @@ export function createSfx(g, music) {
   let grazeEnv = null;
   /** @type {OscillatorNode | null} */
   let grazeLfo = null;
+  /** @type {AudioBufferSourceNode | null} */
+  let wellSrc = null;
+  /** @type {OscillatorNode | null} */
+  let wellSub = null;
+  /** @type {GainNode | null} */
+  let wellEnv = null;
+  /** @type {BiquadFilterNode | null} */
+  let wellLp = null;
 
   // ------------------------------------------------------------ building blocks
 
@@ -195,21 +206,25 @@ export function createSfx(g, music) {
     },
 
     zoneChange(t, zone) {
-      // airy riser into a soft chord in the new key; always plays
+      // airy riser into a soft chord in the new key; always plays. The chord lands on the downbeat
+      // where the music modulates (music.setZone takes effect at the next bar), so they never clash.
       const r = zoneRoot(zone) + 12;
+      let tc = music.nextBar(t + 0.5);
+      if (tc < 0 || tc > t + 3) tc = t + 0.75;
+      const rise = tc - t;
       const src = ctx.createBufferSource();
       src.buffer = g.noise;
+      src.loop = true;
       const f = ctx.createBiquadFilter();
       f.type = 'bandpass'; f.Q.value = 1.4;
       f.frequency.setValueAtTime(300, t);
-      f.frequency.exponentialRampToValueAtTime(4500, t + 0.8);
+      f.frequency.exponentialRampToValueAtTime(4500, tc + 0.05);
       const env = ctx.createGain();
-      const nEnd = swellEnv(env.gain, t, 0.16, 0.75, t + 0.8, 0.08);
+      const nEnd = swellEnv(env.gain, t, 0.16, rise, tc + 0.05, 0.08);
       src.connect(f); f.connect(env); env.connect(g.sfxBus);
       src.start(t, Math.random() * 0.5);
       src.stop(nEnd);
       onEnd(src, f, env);
-      const tc = t + 0.75;
       for (let i = 0; i < 4; i++) {
         const semis = i === 0 ? 0 : i === 1 ? 7 : i === 2 ? 12 : 15;
         const o = ctx.createOscillator();
@@ -224,10 +239,13 @@ export function createSfx(g, music) {
     },
 
     slingshot(t) {
-      if (!pool.take(t, t + 1)) return;
+      // whoosh up out of the well, a sub boom as it lets go, then a bright bell in key
+      if (!pool.take(t, t + 1.2)) return;
       glide(t, 160, 880, 0.4, 0.16, 0.05, 0.16, 'triangle', g.sfxBus);
       noiseSweep(t, 300, 3200, 0.4, 1.6, 0.2, 0.15, 0.12, g.sfxBus);
+      glide(t + 0.3, 110, 38, 0.35, 0.34, 0.006, 0.17, 'sine', g.sfxBus);
       tone(t + 0.36, mtof(music.root + 31), 0.08, 0.003, 0.25, g.bell, 0, g.sfxBus);
+      tone(t + 0.36, mtof(music.root + 43), 0.03, 0.002, 0.18, 'sine', 0, g.sfxBus);
     },
 
     nearMiss(t) {
@@ -242,12 +260,57 @@ export function createSfx(g, music) {
       tone(t + 0.09, mtof(r - 5), 0.1, 0.004, 0.12, g.soft, 3, g.sfxBus);
     },
 
-    death(t) {
-      // noise burst + sub drop on the dry path (the music low-pass is closed by the engine)
+    death(t, cause) {
+      // noise burst + sub drop on the dry path (the music low-pass is closed by the engine).
+      // Planet, moon and front share it; a black hole swallows the comet: a falling whistle on top.
       noiseSweep(t, 4000, 180, 0.5, 0.7, 0.5, 0.004, 0.16, g.sfxDry, 'lowpass');
       glide(t, 150, 32, 0.9, 0.62, 0.01, 0.35, 'sine', g.sfxDry);
       glide(t, 300, 64, 0.9, 0.12, 0.01, 0.2, 'triangle', g.sfxDry); // audible on phone speakers
+      if (cause === DEATH_CAUSE.BLACKHOLE) glide(t, 1400, 90, 0.6, 0.07, 0.01, 0.14, 'sine', g.sfxDry);
       s.graze(false, t);
+      s.well(0, t);
+    },
+
+    wellLevel: 0,
+
+    well(level, t) {
+      const lv = level <= 0 ? 0 : level >= 1 ? 1 : level;
+      if (lv === s.wellLevel) return;
+      s.wellLevel = lv;
+      if (lv > 0 && !wellEnv) {
+        // low rumble (filtered noise) + sub sine, sharing one envelope
+        const src = ctx.createBufferSource();
+        src.buffer = g.noise;
+        src.loop = true;
+        const lp = ctx.createBiquadFilter();
+        lp.type = 'lowpass'; lp.frequency.value = 160; lp.Q.value = 2.2;
+        const sub = ctx.createOscillator();
+        sub.type = 'sine'; sub.frequency.value = 44;
+        const subAmt = ctx.createGain();
+        subAmt.gain.value = 0.55;
+        const env = ctx.createGain();
+        env.gain.setValueAtTime(0, t);
+        src.connect(lp); lp.connect(env);
+        sub.connect(subAmt); subAmt.connect(env);
+        env.connect(g.sfxBus);
+        src.start(t, Math.random() * 1.5);
+        sub.start(t);
+        onEnd(src, lp, env);
+        onEnd(sub, subAmt);
+        wellSrc = src; wellSub = sub; wellEnv = env; wellLp = lp;
+      }
+      if (!wellEnv || !wellLp || !wellSrc || !wellSub) return;
+      if (lv > 0) {
+        wellEnv.gain.setTargetAtTime(0.2 * lv, t, 0.06);
+        wellLp.frequency.setTargetAtTime(160 + 520 * lv, t, 0.06);
+        wellSub.frequency.setTargetAtTime(44 + 26 * lv, t, 0.08);
+      } else {
+        wellEnv.gain.setTargetAtTime(0, t, 0.08);
+        const end = t + 0.6;
+        wellSrc.stop(end);
+        wellSub.stop(end);
+        wellSrc = null; wellSub = null; wellEnv = null; wellLp = null;
+      }
     },
 
     graze(on, t) {
@@ -287,7 +350,7 @@ export function createSfx(g, music) {
 
     voices(now) { return pool.active(now) + motePool.active(now); },
 
-    clear() { pool.clear(); motePool.clear(); },
+    clear() { pool.clear(); motePool.clear(); s.well(0, ctx.currentTime); },
   };
   return s;
 }

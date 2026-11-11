@@ -100,6 +100,28 @@ uniform sampler2D uTexCur;
 uniform vec3 uPal[8];     // bg, nebA, nebB, accent (previous), then the same for current. Linear.
 uniform float uTime;
 uniform vec4 uWall;       // x: left flash, y: right flash, z: wall y offset (wrapped 0..1024), w: unused
+uniform vec4 uHoles[4];   // black holes on screen: rel x, rel y (world, from view centre), core r, influence r
+uniform int uHoleCount;
+
+// Gravitational lensing of the sky behind black holes: a pixel at offset q from a hole shows the
+// sky at q (1 - θE² / |q|²), faded to no shift at the influence edge. Only pixels inside an
+// influence circle pay anything beyond a distance test.
+const float LENS_EINSTEIN = 2.3;   // Einstein radius in core radii
+vec2 lensed(vec2 w) {
+  vec2 off = vec2(0.0);
+  for (int i = 0; i < 4; i++) {
+    if (i >= uHoleCount) break;
+    vec4 h = uHoles[i];
+    vec2 q = w - h.xy;
+    float d2 = dot(q, q);
+    if (d2 >= h.w * h.w) continue;
+    float d = sqrt(d2);
+    float te = h.z * LENS_EINSTEIN;
+    float fall = smoothstep(h.w, h.w * 0.25, d);
+    off -= q * (te * te / max(d2, h.z * h.z * 0.36)) * fall;
+  }
+  return w + off;
+}
 
 vec3 nebula(vec4 n, float macro, vec3 bg, vec3 a, vec3 b, vec3 acc) {
   float da = n.r * n.r, db = n.g * n.g;
@@ -139,7 +161,9 @@ vec3 stars(vec2 pos, float cell, uint seed, float density, float radiusPx, float
 }
 
 void main() {
-  vec2 rel = vUV - 0.5;
+  vec2 rel0 = vUV - 0.5;
+  // Sky lookups (nebula, stars) go through the lens; the walls stay put.
+  vec2 rel = uHoleCount > 0 ? lensed(rel0 * uView) / uView : rel0;
   float pxScale = uRes.x / 780.0;  // star sizes are designed at 780 backing px across
 
   // ---- nebula (parallax 0.1)
@@ -168,7 +192,7 @@ void main() {
   col += stars(rel * uBase * (1.0 + (uZoom - 1.0) * 0.38) + uStar2, 150.0, 43u, 0.42, 1.35 * pxScale, 1.8, upx2, 0.0);
 
   // ---- side walls at x = 0 and x = 1000
-  vec2 w = rel * uView;
+  vec2 w = rel0 * uView;
   float wx = uCamX + w.x;
   float wy = uWall.z + w.y;
   vec3 acc = mix(uPal[3], uPal[7], smoothstep(0.0, 1.0, uFade));

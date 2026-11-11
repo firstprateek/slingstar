@@ -12,6 +12,10 @@
  * @property {(mode: number, first: number, count: number, instances: number) => void} drawArraysInstanced
  * @property {number[]} att0   Preallocated [COLOR_ATTACHMENT0] for invalidateFramebuffer.
  * @property {WebGLVertexArrayObject | null} emptyVao  Bound for attribute-less full-screen draws.
+ * @property {number} sceneScale  Scene values are stored × this (1 for RGBA16F; < 1 in the RGBA8
+ *   fallback so HDR highlights keep headroom above 1). Post multiplies back by 1 / sceneScale.
+ * @property {number} src  Source blend factor every scene pass uses: ONE, or CONSTANT_COLOR (with
+ *   blendColor = sceneScale) when the scene is scaled. Destination factors stay per pass.
  */
 
 /** @param {WebGL2RenderingContext} gl @returns {Gfx} */
@@ -26,6 +30,8 @@ export function createGfx(gl) {
     },
     att0: [gl.COLOR_ATTACHMENT0],
     emptyVao: null,
+    sceneScale: 1,
+    src: gl.ONE,
   };
   return gfx;
 }
@@ -98,12 +104,13 @@ export function createProgram(gl, vs, fs, name, uniforms, attribs = []) {
  * @param {WebGL2RenderingContext} gl @param {number} w @param {number} h
  * @param {boolean} half  RGBA16F when true, else RGBA8.
  * @param {number} [wrap]
+ * @param {number} [format]  Explicit internal format (e.g. SRGB8_ALPHA8); overrides `half`.
  * @returns {Target | null}
  */
-export function createTarget(gl, w, h, half, wrap = gl.CLAMP_TO_EDGE) {
+export function createTarget(gl, w, h, half, wrap = gl.CLAMP_TO_EDGE, format = 0) {
   const tex = gl.createTexture();
   gl.bindTexture(gl.TEXTURE_2D, tex);
-  gl.texStorage2D(gl.TEXTURE_2D, 1, half ? gl.RGBA16F : gl.RGBA8, w, h);
+  gl.texStorage2D(gl.TEXTURE_2D, 1, format || (half ? gl.RGBA16F : gl.RGBA8), w, h);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, wrap);

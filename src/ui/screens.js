@@ -96,6 +96,7 @@ export function createScreens(root, handlers) {
   chips.setAttribute('role', 'radiogroup');
   const chipDaily = button(chips, 'chip', '');
   chipDaily.innerHTML = 'Daily<span class="chip-sub">today’s sky</span>';
+  const chipDailySub = /** @type {HTMLElement} */ (chipDaily.lastElementChild);
   const chipEndless = button(chips, 'chip', '');
   chipEndless.innerHTML = 'Endless<span class="chip-sub">new every run</span>';
   chipDaily.setAttribute('role', 'radio');
@@ -131,7 +132,8 @@ export function createScreens(root, handlers) {
   const overScore = el('div', 'over-score', overTop, '0');
   const newBest = el('div', 'newbest', overTop, 'NEW BEST');
   const overBest = el('div', 'over-best', overTop);
-  overBest.appendChild(document.createTextNode('BEST'));
+  const overBestLabel = document.createTextNode('BEST');
+  overBest.appendChild(overBestLabel);
   const overBestValue = el('b', '', overBest, '0');
   const stats = el('div', 'stats', overTop);
   const zoneStat = el('div', 'stat', stats);
@@ -227,6 +229,11 @@ export function createScreens(root, handlers) {
         if (typeof d.mode === 'string') mode = d.mode;
         if (typeof d.sound === 'boolean') sound = d.sound;
         reflectMode(); reflectSound();
+        // TITLE data may carry `daily`: today's date for the Daily chip ("Nov 10"); same seed all day.
+        if (typeof d.daily === 'string' && d.daily) {
+          chipDailySub.textContent = d.daily;
+          chipDaily.setAttribute('aria-label', `Daily, ${d.daily}`);
+        }
         const b = Number(d.best) || 0;
         best.style.visibility = b > 0 ? 'visible' : 'hidden';
         bestValue.textContent = fmt(b);
@@ -238,6 +245,7 @@ export function createScreens(root, handlers) {
         overBestValue.textContent = fmt(Math.max(Number(d.best) || 0, Number(d.score) || 0));
         newBest.hidden = !d.newBest;
         overBest.hidden = !!d.newBest;
+        overBestLabel.nodeValue = d.mode === MODE.DAILY ? 'TODAY’S BEST' : 'BEST';
         const z = Math.max(1, Math.floor(Number(d.zone) || 1));
         const def = ZONE_DEFS[(z - 1) % ZONE_DEFS.length];
         zoneValue.textContent = String(z);

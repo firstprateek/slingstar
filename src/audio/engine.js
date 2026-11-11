@@ -15,7 +15,7 @@
  * Nothing is scheduled or synthesised before unlock or while disabled / hidden.
  */
 import { CONFIG } from '../config.js';
-import { EV, SCREEN } from '../contracts.js';
+import { BODY, COMET, EV, SCREEN } from '../contracts.js';
 import { buildGraph, MASTER_LEVEL } from './graph.js';
 import { createMusic } from './music.js';
 import { createSfx } from './sfx.js';
@@ -26,6 +26,30 @@ const DEATH_FILTER_S = CONFIG.DEATH_LOWPASS_S;
 const DEATH_MUSIC_DUCK = CONFIG.DEATH_MUSIC_DUCK;
 /** Small offset so sounds triggered "now" are not scheduled in the past. */
 const LEAD_IN = 0.005;
+/** Black-hole drone: re-target its level only when it moves by more than this (fewer automation events). */
+const WELL_STEP = 0.04;
+
+/**
+ * How deep the free-flying comet is inside the nearest black hole's influence radius, 0..1
+ * (0 outside, 1 at the core). Reads world state only; no allocation.
+ * @param {import('../contracts.js').WorldT} world
+ */
+export function wellDepth(world) {
+  const c = world.comet;
+  if (world.dead || c.state !== COMET.FREE) return 0;
+  const b = world.bodies;
+  let best = 0;
+  for (let i = 0, n = b.count; i < n; i++) {
+    if (b.alive[i] === 0 || b.type[i] !== BODY.BLACKHOLE) continue;
+    const dx = c.x - b.x[i], dy = c.y - b.y[i];
+    const rc = b.rc[i];
+    const d2 = dx * dx + dy * dy;
+    if (d2 >= rc * rc) continue;
+    const k = 1 - Math.sqrt(d2) / rc;
+    if (k > best) best = k;
+  }
+  return best;
+}
 
 /**
  * @typedef {Object} AudioCore  The graph plus music and SFX on one context (live or offline).
@@ -79,7 +103,7 @@ export function createCore(ctx, masterLevel = MASTER_LEVEL) {
         case EV.TIER_UP: music.setTier(a, t); sfx.tierUp(t, a); break;
         case EV.ZONE_CHANGE: music.setZone(a); sfx.zoneChange(t, a); break;
         case EV.SLINGSHOT: sfx.slingshot(t); break;
-        case EV.DEATH: sfx.death(t); core.closeFilter(t); break;
+        case EV.DEATH: sfx.death(t, a); core.closeFilter(t); break;
         default: break;
       }
     },
@@ -147,6 +171,7 @@ export function createAudio(opts) {
     suspend() {
       hidden = true;
       stopScheduler();
+      if (core && ctx) { core.sfx.graze(false, ctx.currentTime); core.sfx.well(0, ctx.currentTime); }
       if (ctx && ctx.state === 'running') ctx.suspend().catch(ignore);
     },
 
@@ -164,7 +189,7 @@ export function createAudio(opts) {
       const t = ctx.currentTime;
       core.graph.master.gain.setTargetAtTime(on ? MASTER_LEVEL : 0, t, on ? 0.08 : 0.03);
       if (on) startScheduler();
-      else { stopScheduler(); core.sfx.graze(false, t); }
+      else { stopScheduler(); core.sfx.graze(false, t); core.sfx.well(0, t); }
     },
 
     onEvent(type, x, y, a, b) {
@@ -187,8 +212,12 @@ export function createAudio(opts) {
       const sc = world.score;
       if (sc.tier !== m.tier) m.setTier(sc.tier, t);
       if (sc.zone !== m.zone) m.setZone(sc.zone);
-      const g = scene === SCREEN.PLAYING && !world.dead && world.comet.grazing;
+      const playing = scene === SCREEN.PLAYING && !world.dead;
+      const g = playing && world.comet.grazing;
       if (g !== core.sfx.grazing) core.sfx.graze(g, t);
+      const w = playing ? wellDepth(world) : 0;
+      const wl = core.sfx.wellLevel;
+      if (w === 0 ? wl !== 0 : (w - wl > WELL_STEP || wl - w > WELL_STEP)) core.sfx.well(w, t);
     },
 
     setScene(s) {
@@ -197,7 +226,7 @@ export function createAudio(opts) {
       const t = ctx.currentTime;
       core.music.setScene(s, t);
       if (s === SCREEN.TITLE && deathClosed) { core.openFilter(t); deathClosed = false; }
-      if (s !== SCREEN.PLAYING) core.sfx.graze(false, t);
+      if (s !== SCREEN.PLAYING) { core.sfx.graze(false, t); core.sfx.well(0, t); }
     },
 
     resetRun() {
@@ -207,6 +236,7 @@ export function createAudio(opts) {
       deathClosed = false;
       core.music.reset(t);
       core.sfx.graze(false, t);
+      core.sfx.well(0, t);
       core.sfx.clear();
     },
 

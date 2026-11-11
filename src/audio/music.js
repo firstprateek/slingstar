@@ -68,6 +68,8 @@ export function zoneRoot(zone) {
  * @property {(end: number) => void} scheduleUntil
  * @property {(tier: number, t: number) => void} setTier
  * @property {(zone: number) => void} setZone
+ * @property {(after: number) => number} nextBar  Start time of the first bar at or after `after`
+ *   (where a pending key change lands), or -1 when the scheduler has not started.
  * @property {(scene: string, t: number) => void} setScene
  * @property {(t: number) => void} reset       Tier 1, zone 1 key (immediately).
  * @property {(t: number, i: number, on: boolean) => void} forceLayer  Test hook: solo / mute a layer.
@@ -146,6 +148,12 @@ export function createMusic(g) {
     setZone(zone) {
       m.zone = zone;
       m.pendingRoot = zoneRoot(zone);
+    },
+    nextBar(after) {
+      if (!(m.nextTime > 0)) return -1;
+      let tb = m.nextTime + ((16 - step) & 15) * S16;
+      while (tb < after) tb += BAR;
+      return tb;
     },
     setScene(scene, t) {
       if (scene === SCREEN.TITLE) titleMode = true;

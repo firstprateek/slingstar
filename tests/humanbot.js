@@ -4,16 +4,26 @@
 //   - it only "sees" a new situation after a reaction delay (150–250 ms);
 //   - it plans each release for the centre of the next clear release window (as a player watching
 //     the aim line sweep would) and misses that moment by a Gaussian timing error (σ 40–80 ms per
-//     player);
+//     player). Its forecast uses the aim line's rule (sim castRay), so it sees moons and
+//     drifting / binary planets where they will be;
 //   - it presses ahead of the next ring (an armed hold), never while still inside the ring it
 //     just left (it waits for the comet to clear it, then reacts), and on some approaches presses
 //     late, after the comet is already inside the ring.
 // Deterministic: all randomness comes from a mulberry32 seeded per run. Pure (reads world state
 // only, like the real bot) and decides one held value per fixed step.
+//
+// Two release models:
+//   - default ("planner", optimistic): forecasts the orbit and aims for the centre of the next
+//     clear window, as a practised player who has learnt the rhythm might;
+//   - `honest: true` ("reactive"): no forecasting at all. It watches the aim line; once the line is
+//     lit onto the next path planet (and the orbit has been perceived), it lets go one sampled
+//     reaction time later (reactionMin..reactionMax), whether or not the line is still lit then.
+//     When the orbit gets low (altitude < desperateAltitude) it also takes a line lit onto any
+//     planet higher up. This is the pessimistic end of human play.
 import { CONFIG, STEP } from '../src/config.js';
 import { BODY, COMET, EV } from '../src/contracts.js';
 import { createRng, hash32 } from '../src/core/rng.js';
-import { createWorld } from '../src/sim/world.js';
+import { createWorld, castRay } from '../src/sim/world.js';
 
 export const HUMAN_DEFAULTS = Object.freeze({
   reactionMin: 0.15, reactionMax: 0.25,
@@ -27,6 +37,10 @@ export const HUMAN_DEFAULTS = Object.freeze({
   exitReactMin: 0.1, exitReactMax: 0.2,
   /** How far ahead the release planner looks (s of orbit). */
   planHorizon: 3,
+  /** Reactive release model (see the header). */
+  honest: false,
+  /** Reactive model: below this altitude a line lit onto any higher planet will do. */
+  desperateAltitude: 50,
 });
 
 /**
@@ -81,37 +95,6 @@ export function createHumanBot(seed, opts = {}) {
     return -1;
   }
 
-  /** Slot of the planet whose ring the ray enters first, cleanly (sim castAim rules), or -1. */
-  function rayClean(w, px, py, dx, dy, exclude) {
-    const b = w.bodies;
-    let hit = Infinity, ring = Infinity, first = -1;
-    for (let i = 0; i < b.count; i++) {
-      if (!b.alive[i] || i === exclude) continue;
-      const fx = px - b.x[i], fy = py - b.y[i];
-      const f2 = fx * fx + fy * fy, fd = fx * dx + fy * dy;
-      const hr = b.type[i] === BODY.BLACKHOLE ? b.rc[i] : b.r[i] + CONFIG.COMET_RADIUS;
-      let cc = f2 - hr * hr;
-      if (cc <= 0) hit = 0;
-      else if (fd <= 0 && fd * fd >= cc) hit = Math.min(hit, -fd - Math.sqrt(fd * fd - cc));
-      if (b.type[i] === BODY.PLANET && b.rc[i] > 0) {
-        cc = f2 - b.rc[i] * b.rc[i];
-        let tr = -1;
-        if (cc <= 0) tr = 0; else if (fd <= 0 && fd * fd >= cc) tr = -fd - Math.sqrt(fd * fd - cc);
-        if (tr >= 0 && tr < ring) { ring = tr; first = i; }
-      }
-    }
-    if (first < 0 || ring >= hit) return -1;
-    const lo = CONFIG.WALL_MARGIN, hi = CONFIG.FIELD_WIDTH - CONFIG.WALL_MARGIN;
-    const wall = dx < 0 ? (px - lo) / -dx : dx > 0 ? (hi - px) / dx : Infinity;
-    if (ring > wall) return -1;
-    // Must get AIM_RING_MARGIN inside the ring.
-    const t = first;
-    const fx = px - b.x[t], fy = py - b.y[t], r = b.rc[t] - CONFIG.AIM_RING_MARGIN;
-    const fd = fx * dx + fy * dy, cc = fx * fx + fy * fy - r * r;
-    if (fd > 0 || fd * fd < cc) return -1;
-    return -fd - Math.sqrt(fd * fd - cc) < hit ? t : -1;
-  }
-
   /**
    * Forecast the orbit forward and return the centre time of the first clear window whose centre
    * is at or after `from` (absolute world time), or -1. `anyAbove`: accept any planet higher up
@@ -129,7 +112,8 @@ export function createHumanBot(seed, opts = {}) {
       const ca = Math.cos(ang), sa = Math.sin(ang);
       const px = b.x[i] + ca * rho, py = b.y[i] + sa * rho;
       const dx = -sa * c.orbitDir, dy = ca * c.orbitDir;
-      const hitSlot = rayClean(w, px, py, dx, dy, i);
+      // The same rule as the aim line, with moving bodies where they will be (sim castRay).
+      const hitSlot = castRay(w, px, py, dx, dy, sp, time, i);
       const ok = hitSlot >= 0 && (hitSlot === t || (anyAbove && b.y[hitSlot] > b.y[i] + 100));
       if (ok && !inWin) { inWin = true; winStart = time; }
       if (!ok && inWin) {
@@ -184,7 +168,16 @@ export function createHumanBot(seed, opts = {}) {
         releaseAt = -1; replanAt = -1;
         if (!w.started) held = true;   // touch down on the home planet, release later
       }
-      if (releaseAt < 0 && w.time >= perceiveAt && (replanAt < 0 || w.time >= replanAt)) {
+      if (o.honest) {
+        if (releaseAt < 0 && w.time >= perceiveAt && w.aim.clear && w.aim.target >= 0) {
+          const b = w.bodies, tg = w.aim.target;
+          const cur = b.pathIndex[c.body];
+          const want = (cur >= 0 ? cur : w.score.pathReached) + 1;
+          const onPath = b.pathIndex[tg] === want;
+          const higher = b.y[tg] > b.y[c.body] + 100;
+          if (onPath || (higher && w.started && c.altitude < o.desperateAltitude)) releaseAt = w.time + reaction();
+        }
+      } else if (releaseAt < 0 && w.time >= perceiveAt && (replanAt < 0 || w.time >= replanAt)) {
         let centre = planRelease(w, w.time, false);
         if (centre < 0) centre = planRelease(w, w.time, true);
         if (centre >= 0) releaseAt = centre + gauss();

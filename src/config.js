@@ -105,6 +105,50 @@ export const CONFIG = Object.freeze({
   BINARY_SEPARATION_MAX: 440,
   BINARY_ANGULAR_SPEED: 0.35,
 
+  // ---------------------------------------------------------------- Phase 3 stream SIM: hazard generation
+  // (append-only block owned by the sim stream; rates are per path planet unless noted)
+  /** Chance a path planet gets moons in the zone that introduces them (2), and in later zones. */
+  HAZARD_MOON_INTRO: 0.5,
+  HAZARD_MOON_LATER: 0.3,
+  /** Zone 6+: chance a mooned planet gets a second moon (opposite phase). */
+  HAZARD_MOON_SECOND: 0.35,
+  /** Chance a path planet drifts, in zone 3 and later (never two moving path planets in a row). */
+  HAZARD_DRIFT_INTRO: 0.5,
+  HAZARD_DRIFT_LATER: 0.25,
+  /** Chance a path segment gets a black hole beside it, in zone 4 and later. */
+  HAZARD_BLACKHOLE_INTRO: 0.6,
+  HAZARD_BLACKHOLE_LATER: 0.3,
+  /** Chance a path planet is a binary pair, in zone 5 and later. */
+  HAZARD_BINARY_INTRO: 0.45,
+  HAZARD_BINARY_LATER: 0.2,
+  /** Zone 6+: every later-zone rate rises by this per zone, up to HAZARD_RATE_MAX. */
+  HAZARD_RAMP_PER_ZONE: 0.03,
+  HAZARD_RATE_MAX: 0.55,
+  /** After this many failed tries a hazardous path placement is re-rolled as a plain planet. */
+  HAZARD_PLAIN_AFTER_TRIES: 12,
+  /** Binary members are small so both rings fit the separation with BODY_GAP. */
+  BINARY_R_MAX: 85,
+  /** Black-hole centres stay inside this x range; placement tries per segment. */
+  BLACKHOLE_X_MIN: 70,
+  BLACKHOLE_X_MAX: 930,
+  BLACKHOLE_TRIES: 24,
+  /** A rolled black hole with no room beside its segment carries to the next ones (at most this many pending). */
+  BLACKHOLE_CARRY: 2,
+  /** A pass pays the slingshot only if it got this deep (fraction of the influence radius). */
+  BLACKHOLE_SLINGSHOT_DEPTH: 0.8,
+  /** Solvability on a planet with moons measures the window on the orbit band that starts this far
+   * (comet surface to moon surface) above the moons, or SOLVE_CLEARANCE (comet centre) if larger. */
+  MOON_SAFE_GAP: 10,
+  /** Solvability phases sampled for a moving path planet (drift positions / binary angles). */
+  SOLVE_DRIFT_PHASES: 13,
+  SOLVE_BINARY_PHASES: 36,
+  /** Aim line: moving bodies are checked at their predicted positions every this many units. */
+  AIM_MARCH_STEP: 6,
+  /** After a release the planet just left cannot be re-latched (unless the comet heads back toward
+   * it) until the comet is this far outside its ring. */
+  LEFT_RING_CLEAR: 40,
+  // ---------------------------------------------------------------- end stream SIM block
+
   // ---------------------------------------------------------------- generation
   MAX_BODIES: 64,
   MAX_MOTES: 256,

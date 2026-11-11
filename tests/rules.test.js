@@ -263,7 +263,19 @@ test('combo resets on re-catching the planet just left', () => {
   assert.equal(w.score.combo, 2);
   d.step(false);
   assert.equal(w.comet.state, COMET.FREE);
-  const ev = d.step(true); // still inside the ring just left
+  // Phase 3: a press while still inside the ring just left, moving away from it, does NOT latch
+  // back on (it arms the hold for the next ring instead) …
+  let ev = d.step(true);
+  assert.equal(w.comet.state, COMET.FREE);
+  assert.equal(w.comet.armed, true);
+  assert.equal(ofType(ev, EV.LATCH).length, 0);
+  assert.equal(w.score.combo, 2);
+  d.step(false);
+  // … but once the comet heads back in (as after a bounce or a black-hole bend), re-catching that
+  // planet is possible and resets the combo.
+  const c = w.comet;
+  c.vx = -c.vx; c.vy = -c.vy; c.heading = Math.atan2(c.vy, c.vx);
+  ev = d.step(true); // still inside the ring just left, now heading back toward its centre
   assert.equal(w.comet.body, p);
   const br = ofType(ev, EV.COMBO_BREAK);
   assert.equal(br.length, 1);

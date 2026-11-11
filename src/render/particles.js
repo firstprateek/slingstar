@@ -33,6 +33,10 @@ export function createParticles() {
   const binLife = new Float32Array(BIN_COUNT);
   let bin = 0;
   let binNow = -1;
+  // Warm-up: slot 0 is borrowed for one live particle, then restored.
+  const saved = new Float32Array(STRIDE);
+  const P = new Float64Array(STRIDE);
+  let savedUsed = 0;
 
   const self = {
     get originY() { return originY; },
@@ -73,25 +77,48 @@ export function createParticles() {
     },
 
     /**
-     * Write one particle. World coordinates; `birth` on the renderer's effect clock.
-     * @param {number} x @param {number} y @param {number} vx @param {number} vy
-     * @param {number} birth @param {number} life @param {number} size reference px (diameter)
-     * @param {number} drag 1/s @param {number} r @param {number} g @param {number} b
-     * @param {number} stretch 0 = round, >0 elongated along velocity
+     * Spawn staging (doubles, so world coordinates keep full precision until the origin is
+     * subtracted): x, y, vx, vy, birth (effect clock), life, size (reference px, diameter),
+     * drag (1/s), r, g, b, stretch (0 = round, >0 elongated along velocity). Callers fill it and
+     * call commit(), so hot loops never pass doubles as call arguments.
      */
-    spawn(x, y, vx, vy, birth, life, size, drag, r, g, b, stretch) {
+    P,
+
+    /** Write the particle staged in P into the ring. */
+    commit() {
       const o = head * STRIDE;
-      data[o] = x; data[o + 1] = y - originY; data[o + 2] = vx; data[o + 3] = vy;
-      data[o + 4] = birth; data[o + 5] = life; data[o + 6] = size; data[o + 7] = drag;
-      data[o + 8] = r; data[o + 9] = g; data[o + 10] = b; data[o + 11] = stretch;
+      data[o] = P[0]; data[o + 1] = P[1] - originY; data[o + 2] = P[2]; data[o + 3] = P[3];
+      data[o + 4] = P[4]; data[o + 5] = P[5]; data[o + 6] = P[6]; data[o + 7] = P[7];
+      data[o + 8] = P[8]; data[o + 9] = P[9]; data[o + 10] = P[10]; data[o + 11] = P[11];
       if (pending === 0) pendingStart = head;
       if (pending < CAP) pending++;
       head = head + 1 === CAP ? 0 : head + 1;
       if (used < CAP) used++;
       if (binTime[bin] === binNow) {
         binCount[bin]++;
-        if (life > binLife[bin]) binLife[bin] = life;
+        if (P[5] > binLife[bin]) binLife[bin] = P[5];
       }
+    },
+
+    /**
+     * Hidden warm-up frame: make slot 0 a live particle at (x, y) so the draw runs the full
+     * vertex + fragment path. Call unwarm() after the frame. Boot / context restore only.
+     * @param {number} x @param {number} y @param {number} now
+     */
+    warm(x, y, now) {
+      for (let k = 0; k < STRIDE; k++) saved[k] = data[k];
+      savedUsed = used;
+      data[0] = x; data[1] = y - originY; data[2] = 10; data[3] = 0;
+      data[4] = now; data[5] = 1; data[6] = 8; data[7] = 1;
+      data[8] = 1; data[9] = 1; data[10] = 1; data[11] = 1;
+      if (used < 1) used = 1;
+      fullUpload = true;
+    },
+
+    unwarm() {
+      for (let k = 0; k < STRIDE; k++) data[k] = saved[k];
+      used = savedUsed;
+      fullUpload = true;
     },
 
     /** Start a new frame's spawn bin. @param {number} now effect clock */
@@ -146,7 +173,7 @@ export function createParticles() {
       gl.uniform2f(prog.u.uScale, sx, sy);
       gl.uniform2f(prog.u.uPx, pxX, pxY);
       gl.enable(gl.BLEND);
-      gl.blendFunc(gl.ONE, gl.ONE);
+      gl.blendFunc(gfx.src, gl.ONE);
       gl.bindVertexArray(vao);
       gfx.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, n);
       gl.bindVertexArray(null);

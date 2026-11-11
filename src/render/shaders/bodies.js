@@ -1,29 +1,36 @@
 // @ts-check
 /**
  * Bodies: one instanced draw. Each quad is shaded by type: lit procedural sphere (planet / moon)
- * with limb light, atmosphere rim and optional ring; capture ring band; black hole (dark core,
- * photon ring, lensed arc, swirling accretion disk); faint binary orbit path.
+ * with limb light, atmosphere rim and optional ring; capture ring band; drifting planets trail a
+ * soft streaked wake; moons are dark rock with a pulsing warning rim and a fading orbit trace;
+ * black hole (dark core, photon ring, lensed arc, swirling accretion disk, faint influence edge;
+ * the starfield lensing itself happens in the background pass); binary pairs share a faint orbit
+ * with arcs trailing each partner and a tether through the barycentre; drifting planets show a
+ * faint track of their sideways range.
  * Output is premultiplied alpha (blend ONE, ONE_MINUS_SRC_ALPHA); glows use alpha 0 (additive).
+ * Every branch is bounded by its quad (the instance extent), never full screen.
  */
 import { HEADER, HASH } from './common.js';
 
 /** Render-local instance types (planet/moon/black hole match BODY.*). */
-export const BTYPE = Object.freeze({ PLANET: 0, MOON: 1, BLACKHOLE: 2, ORBIT_PATH: 3 });
+export const BTYPE = Object.freeze({ PLANET: 0, MOON: 1, BLACKHOLE: 2, ORBIT_PATH: 3, MOON_TRACE: 4, DRIFT_TRACK: 5 });
 
 export const BODIES_VS = `${HEADER}
 in vec2 aCorner;
 in vec4 aA;     // rel x, rel y, r, rc   (world units, relative to the view centre)
-in vec4 aB;     // extent, highlight, pulse, unused
+in vec4 aB;     // extent x, highlight, pulse, extent y (0 = square)
+in vec4 aC;     // per-type extras (see BTYPE users in bodies.js)
 in uvec4 aI;    // seed, type, flags, palette
 uniform vec2 uScale;
 out vec2 vLocal;
 flat out vec4 vA;
 flat out vec4 vB;
+flat out vec4 vC;
 flat out uvec4 vI;
 void main() {
-  vec2 local = aCorner * aB.x;
+  vec2 local = aCorner * vec2(aB.x, aB.w > 0.0 ? aB.w : aB.x);
   vLocal = local;
-  vA = aA; vB = aB; vI = aI;
+  vA = aA; vB = aB; vC = aC; vI = aI;
   gl_Position = vec4((aA.xy + local) * uScale, 0.0, 1.0);
 }
 `;
@@ -32,6 +39,7 @@ export const BODIES_FS = `${HEADER}${HASH}
 in vec2 vLocal;
 flat in vec4 vA;
 flat in vec4 vB;
+flat in vec4 vC;
 flat in uvec4 vI;
 out vec4 outColor;
 
@@ -187,27 +195,56 @@ vec3 captureRing(vec2 p, float r, float rc, float hi, float pulse, vec3 idle) {
 }
 
 // ---------------------------------------------------------------- moon
+// Lethal: the same warning red in every zone (nudged slightly toward the zone accent).
+vec3 hazardColor(int pal) { return mix(vec3(1.0, 0.16, 0.08), hueOf(uPalC[pal]), 0.12); }
+
 vec4 shadeMoon(vec2 p, float r, uint seed, int pal) {
   float d = length(p);
   float q = d / r;
-  vec3 hazard = mix(hueOf(uPalC[pal]), vec3(1.0, 0.3, 0.2), 0.6);
+  vec3 hazard = hazardColor(pal);
+  float beat = 0.72 + 0.28 * sin(uTime * 4.4 + rnd(seed, 0x3du) * 6.28);
   vec4 res = vec4(0.0);
   if (q > 0.97) {
+    // Tight hot rim plus a thin danger halo ring just outside the surface.
     float hgt = max(d - r, 0.0) / r;
-    res.rgb += hazard * (exp(-hgt * 6.0) * 0.55 + exp(-hgt * 2.0) * 0.08);
+    float halo = exp(-hgt * 7.0) * 0.75 + exp(-hgt * 2.2) * 0.1;
+    float band = exp(-(hgt - 0.42) * (hgt - 0.42) / 0.006) * 0.32;
+    res.rgb += hazard * (halo + band) * beat;
   }
   if (q < 1.0) {
     vec3 n = vec3(p / r, sqrt(max(1.0 - q * q, 0.0)));
-    float h = vnoise3(n * 3.0, seed) * 0.6 + vnoise3(n * 7.5, seed + 3u) * 0.4;
-    float crater = smoothstep(0.62, 0.7, vnoise3(n * 5.0, seed + 9u));
-    vec3 alb = mix(vec3(0.34, 0.32, 0.31), vec3(0.62, 0.6, 0.57), h) * (1.0 - crater * 0.35);
+    float spin = uTime * 0.5 + rnd(seed, 0x2du) * 6.28;
+    float cs = cos(spin), ss = sin(spin);
+    vec3 m = vec3(cs * n.x + ss * n.z, n.y, -ss * n.x + cs * n.z);
+    float h = vnoise3(m * 3.0, seed) * 0.6 + vnoise3(m * 7.5, seed + 3u) * 0.4;
+    float crater = smoothstep(0.6, 0.68, vnoise3(m * 5.0, seed + 9u));
+    // Dark basalt with faint glowing fissures: reads as rock, not as a catchable planet.
+    vec3 alb = mix(vec3(0.045, 0.04, 0.045), vec3(0.17, 0.15, 0.15), h) * (1.0 - crater * 0.5);
     float ndl = dot(n, LIGHT);
-    vec3 col = alb * (smoothstep(-0.15, 1.0, ndl) * 1.3 + 0.03);
-    col += hazard * pow(1.0 - n.z, 2.0) * (0.2 + 1.4 * smoothstep(-0.3, 0.7, ndl));
+    vec3 col = alb * (smoothstep(-0.15, 1.0, ndl) * 1.3 + 0.02);
+    float fis = 1.0 - abs(vnoise3(m * 4.2, seed + 21u) * 2.0 - 1.0);
+    col += hazard * pow(fis, 14.0) * 0.9 * beat;
+    col += hazard * pow(1.0 - n.z, 2.2) * (0.5 + 1.6 * beat);
     float aa = 1.0 - smoothstep(r - 1.5 * uUpp, r + 0.2 * uUpp, d);
     res = over(vec4(col, 1.0) * aa, res);
   }
   return res;
+}
+
+// Moon orbit trace: faint red circle, brightest just behind the moon and fading around the orbit.
+// r = orbit radius, aux.x = moon angle, aux.y = direction (+1 ccw / -1 cw), aux.z = moon radius.
+vec3 moonTrace(vec2 p, float r, vec4 aux, int pal) {
+  float d = length(p);
+  float dr = d - r;
+  float w = max(1.6, 1.1 * uUpp);
+  float line = exp(-dr * dr / (w * w));
+  if (line < 0.004) return vec3(0.0);
+  float ang = atan(p.y, p.x);
+  // Angle travelled since the moon passed this point (0 just behind it, 2π a full lap ago).
+  float behind = mod((aux.x - ang) * aux.y, 6.2831853);
+  float tail = exp(-behind * 1.15);
+  float dash = step(0.0, sin(ang * r * 0.16));
+  return hazardColor(pal) * line * (tail * 0.95 + 0.07 * dash);
 }
 
 // ---------------------------------------------------------------- black hole
@@ -219,14 +256,26 @@ vec4 shadeBlackHole(vec2 p, float r, float rc, uint seed, int pal) {
   vec4 res = vec4(0.0);
 
   // Influence zone: dims the sky toward the core, faint spiral and a soft edge.
-  float dark = smoothstep(rs * 5.0, rs * 1.0, d) * 0.9;
+  float dark = smoothstep(rs * 3.6, rs * 1.0, d) * 0.85;
   res = vec4(0.0, 0.0, 0.0, dark);
   if (d < rc + 25.0) {
     float ang = atan(p.y, p.x);
     float sp = sin(ang * 3.0 + log(max(d, 1.0)) * 7.0 - uTime * 1.8);
     float fall = smoothstep(rc, rs * 2.5, d) * smoothstep(rs * 1.4, rs * 3.5, d);
-    float edge = exp(-(d - rc) * (d - rc) / 16.0) * (0.65 + 0.35 * sin(ang * 36.0 + uTime * 2.2));
-    res.rgb += acc * (edge * 0.32 + max(sp, 0.0) * fall * 0.09 + exp(-abs(d - rc) / 30.0) * 0.05);
+    // Influence edge: NOT a capture ring (it cannot be caught). Rings of dust motes appear at the
+    // edge and spiral inward, plus a very soft boundary haze.
+    float infall = 0.0;
+    float nd = floor(rc * 6.2831853 / 46.0);
+    for (int k = 0; k < 3; k++) {
+      float ph = fract(uTime * 0.2 + float(k) / 3.0);
+      float rr = rc - ph * 110.0;
+      float cell = (ang + ph * 1.4 + float(k) * 0.7) / 6.2831853 * nd;
+      float arc = (fract(cell) - 0.5) * (6.2831853 * rr / nd);
+      float rad = d - rr;
+      infall += exp(-(arc * arc + rad * rad) / 6.0) * sin(ph * 3.14159);
+    }
+    float haze = exp(-abs(d - rc) / 26.0) * (d < rc ? 1.0 : 0.4);
+    res.rgb += acc * (infall * 0.4 + max(sp, 0.0) * fall * 0.09 + haze * 0.07);
   }
 
   // Accretion disk in a tilted plane.
@@ -263,16 +312,72 @@ vec4 shadeBlackHole(vec2 p, float r, float rc, uint seed, int pal) {
   res = over(vec4(0.0, 0.0, 0.0, core), res);
   float rq2 = (dn - 1.04) / 0.04;
   float ring = exp(-rq2 * rq2);
-  res.rgb += mix(hot, vec3(1.0), 0.5) * ring * 2.6;
+  res.rgb += mix(hot, vec3(1.0), 0.5) * ring * 2.0;
 
   res = over(diskFront, res);
   return res;
+}
+
+// ---------------------------------------------------------------- drifting planet wake
+// Faint horizontal streaks trailing the planet, opposite its motion. v = signed x speed (units/s).
+vec3 driftWake(vec2 p, float r, float v, vec3 atmo) {
+  float sp = abs(v);
+  if (sp < 1.0) return vec3(0.0);
+  float s = -p.x * sign(v);                // distance behind the centre
+  if (s <= 0.0 || abs(p.y) > r * 1.05) return vec3(0.0);
+  float k = clamp(sp / 230.0, 0.0, 1.0);    // 230 ≈ peak drift speed (2π·150 / 4 s)
+  float yn = p.y / r;
+  float profile = sqrt(max(1.0 - yn * yn, 0.0));
+  float edge = max(s - r * profile, 0.0);  // starts at the limb, not the centre
+  // ~9 streaks across the disc, each with its own length and brightness.
+  float row = floor((yn + 1.0) * 4.5);
+  float fy = fract((yn + 1.0) * 4.5) - 0.5;
+  float hl = u2f(pcg(uint(row) * 7919u + 13u));
+  float len = r * (0.18 + 0.75 * hl) * (0.35 + 0.65 * k);
+  float fall = exp(-edge / len) * smoothstep(0.0, 5.0, edge);
+  float thin = exp(-fy * fy * 22.0);
+  return atmo * fall * profile * (0.25 + 0.75 * thin) * (0.5 + 0.5 * hl) * k * 0.3;
+}
+
+// ---------------------------------------------------------------- drift track
+// Thin dotted line across the planet's sideways range with soft end caps. aux.y = amplitude.
+vec3 driftTrack(vec2 p, vec4 aux, vec3 col) {
+  float amp = aux.y;
+  float ax = abs(p.x);
+  float w = max(1.4, 1.0 * uUpp);
+  float line = exp(-p.y * p.y / (w * w)) * step(ax, amp) * step(0.0, sin(p.x * 0.33));
+  float cap = exp(-(ax - amp) * (ax - amp) / (w * w * 2.0)) * smoothstep(13.0, 3.0, abs(p.y));
+  return col * (line * 0.11 + cap * 0.3);
+}
+
+// ---------------------------------------------------------------- binary shared orbit
+// r = orbit radius; aux.x = angle of the first partner, aux.y / aux.z = partner radii,
+// aux.w = direction (+1 ccw / -1 cw). Faint circle, arcs trailing each partner, and a dashed
+// tether through the barycentre with a small centre mark.
+vec3 binaryOrbit(vec2 p, float r, vec4 aux, vec3 col) {
+  float d = length(p);
+  float dr = d - r;
+  float w = max(1.8, 1.1 * uUpp);
+  float ang = atan(p.y, p.x);
+  float line = exp(-dr * dr / (w * w));
+  float b0 = mod((aux.x - ang) * aux.w, 3.14159265);   // both partners: period π
+  float tail = exp(-b0 * 1.3);
+  float k = line * (0.1 + 0.9 * tail);
+  vec2 u = vec2(cos(aux.x), sin(aux.x));
+  float along = dot(p, u);
+  float across = abs(p.x * u.y - p.y * u.x);
+  float inSeg = step(-(r - aux.z - 8.0), along) * step(along, r - aux.y - 8.0);
+  float teth = exp(-across * across / (w * w)) * inSeg * step(0.0, sin(along * 0.25 - uTime * 2.0));
+  k += teth * 0.12;
+  k += exp(-d * d / 30.0) * 0.5 + exp(-(d - 9.0) * (d - 9.0) / 3.0) * 0.18;
+  return col * k;
 }
 
 void main() {
   vec2 p = vLocal;
   float r = vA.z, rc = vA.w;
   float hi = vB.y, pulse = vB.z;
+  vec4 aux = vC;
   uint seed = vI.x, type = vI.y, flags = vI.z;
   int pal = int(vI.w);
   vec4 res = vec4(0.0);
@@ -281,6 +386,7 @@ void main() {
     planetPalette(seed, pal, c1, c2, c3, atmo);
     vec3 idle = mix(atmo, vec3(1.0), 0.35);
     res.rgb = captureRing(p, r, rc, hi, pulse, idle);
+    if (aux.x != 0.0) res.rgb += driftWake(p, r, aux.x, mix(atmo, vec3(1.0), 0.3));
     float d2 = dot(p, p);
     float reach = r * ((flags & 1u) != 0u ? 2.1 : 1.6);
     if (d2 < reach * reach) res = over(shadePlanet(p, r, seed, pal, (flags & 1u) != 0u), res);
@@ -288,12 +394,16 @@ void main() {
     res = shadeMoon(p, r, seed, pal);
   } else if (type == 2u) {
     res = shadeBlackHole(p, r, rc, seed, pal);
+  } else if (type == 3u) {
+    res.rgb = binaryOrbit(p, r, aux, mix(hueOf(uPalC[pal]), vec3(1.0), 0.3) * 0.55);
+  } else if (type == 4u) {
+    res.rgb = moonTrace(p, r, aux, pal);
   } else {
-    // Binary orbit path: faint dashed circle.
-    float d = length(p);
-    float ang = atan(p.y, p.x);
-    float line = exp(-(d - r) * (d - r) / 5.0) * step(0.0, sin(ang * 40.0 + uTime * 0.6));
-    res.rgb = hueOf(uPalC[pal]) * line * 0.16;
+    vec3 c1, c2, c3, atmo;
+    planetPalette(seed, pal, c1, c2, c3, atmo);
+    res.rgb = driftTrack(p, aux, mix(atmo, vec3(1.0), 0.4));
+    outColor = res;
+    return;
   }
   // Fade to zero before the quad edge so no glow term is ever cut off by the quad.
   float ext = vB.x;

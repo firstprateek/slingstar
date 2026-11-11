@@ -1,7 +1,7 @@
 // @ts-check
 /**
  * Playing HUD (PLAN.md §7): score top centre with multiplier and combo beside it, zone banner,
- * combo pop, PERFECT flash and the first-run prompt. Owned by stream D.
+ * combo pop, PERFECT / SLINGSHOT flashes and the first-run prompt. Owned by stream D.
  *
  * Every DOM node is created once in createHud. update() runs every frame but touches the DOM only
  * when a displayed value changes, and never allocates: digits are written as interned
@@ -63,6 +63,7 @@ export function createHud(root) {
   const comboN = el('div', 'hud-combo-n', combo);
   el('div', 'hud-combo-l', combo, 'COMBO');
   const perfect = el('div', 'hud-perfect', root, 'PERFECT');
+  const sling = el('div', 'hud-perfect hud-sling', root, 'SLINGSHOT');
   const zone = el('div', 'hud-zone', root);
   const zoneN = el('div', 'hud-zone-n', zone, ZONE_LABELS[1]);
   const zoneName = el('div', 'hud-zone-name', zone, ZONES[0].name);
@@ -81,6 +82,7 @@ export function createHud(root) {
 
   const comboPop = new Retrigger(combo, 'pop');
   const perfectFlash = new Retrigger(perfect, 'on');
+  const slingFlash = new Retrigger(sling, 'on');
   const zoneBanner = new Retrigger(zone, 'on');
 
   let longScore = false;
@@ -134,6 +136,7 @@ export function createHud(root) {
       if (type === EV.ZONE_CHANGE) showZone(a);
       else if (type === EV.COMBO_UP) { setCombo(a); if (a >= COMBO_SHOW_MIN) comboPop.fire(); }
       else if (type === EV.PERFECT) perfectFlash.fire();
+      else if (type === EV.SLINGSHOT) slingFlash.fire();
     },
     prompt(text) {
       if (text === lastPrompt) return;
@@ -155,7 +158,7 @@ export function createHud(root) {
       if (longScore) { longScore = false; scoreEl.classList.remove('long'); }
       lastMult = 0; setMult(1);
       lastCombo = -1; setCombo(0);
-      comboPop.stop(); perfectFlash.stop(); zoneBanner.stop();
+      comboPop.stop(); perfectFlash.stop(); slingFlash.stop(); zoneBanner.stop();
     },
   };
 }

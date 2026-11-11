@@ -6,8 +6,11 @@
  *
  * URL params: ?zone=N fixed zone (else cycles every 6 s) · ?tier=N fixed tier · ?seed=N ·
  * ?death=T fire a death at T seconds · ?rs=0.6..1 render scale · ?adaptive=1 · ?reduced=1 ·
- * ?scene=title|gameover · ?stats=1 · ?speed=N comet speed · ?front=N front distance below the comet.
- * window.__demo exposes { world, renderer, time, pause, fire(type) } for Playwright.
+ * ?scene=title|gameover · ?stats=1 · ?speed=N comet speed · ?front=N front distance below the comet ·
+ * ?rgba8=1 force the 8-bit scene fallback ·
+ * ?show=Z static showcase of zone Z's hazard (1 plain, 2 moons, 3 drifting, 4 black hole,
+ *   5 binary pair, 6 everything mixed): the comet circles the home planet forever.
+ * window.__demo exposes { world, renderer, pause, fire(type), advance(s), zone(z) } for Playwright.
  */
 import { CONFIG, STEP } from '../config.js';
 import { BODY, BODY_FLAG, COMET, EV, SCREEN } from '../contracts.js';
@@ -22,6 +25,7 @@ const FIXED_ZONE = q.has('zone') ? num('zone', 1) : 0;
 const FIXED_TIER = q.has('tier') ? num('tier', 1) : 0;
 const DEATH_AT = num('death', -1);
 const FRONT_GAP = num('front', 640);
+const SHOW = num('show', 0);
 const rng = createRng(num('seed', 7));
 
 const canvas = /** @type {HTMLCanvasElement} */ (document.getElementById('c'));
@@ -35,6 +39,7 @@ const renderer = createRenderer(canvas, {
   renderScale: num('rs', 1),
   reducedMotion: q.has('reduced'),
   adaptive: q.get('adaptive') === '1',
+  hdr: q.get('rgba8') !== '1',
   onRenderScale: (s) => console.log('renderScale', s),
 });
 if (q.get('scene') === 'title') renderer.setScene(SCREEN.TITLE);
@@ -43,7 +48,7 @@ if (q.get('scene') === 'gameover') renderer.setScene(SCREEN.GAMEOVER);
 const b = world.bodies;
 const c = world.comet;
 let nextId = 1;
-let zone = FIXED_ZONE || 1;
+let zone = FIXED_ZONE || (SHOW ? Math.min(SHOW, 5) : 1);
 let pathCount = 0;     // path planets generated
 let topY = 0;          // y of the last path planet
 let lastX = 500;
@@ -81,6 +86,78 @@ function addBody(type, x, y, r, rc, flags) {
   return i;
 }
 
+/** DRIFTING motion params. @param {number} i @param {number} baseX @param {number} amp @param {number} period @param {number} phase */
+function drift(i, baseX, amp, period, phase) {
+  b.flags[i] |= BODY_FLAG.DRIFTING;
+  b.m0[i] = baseX; b.m1[i] = amp; b.m2[i] = period; b.m3[i] = phase;
+  b.x[i] = b.px[i] = baseX + amp * Math.sin(phase);
+}
+
+/** Moon around planet p. @param {number} p @param {number} r @param {number} w rad/s @param {number} phase */
+function moon(p, r, w, phase) {
+  const m = addBody(BODY.MOON, b.x[p], b.y[p], r, 0, 0);
+  b.parent[m] = p;
+  b.m0[m] = b.r[p] + (b.rc[p] - b.r[p]) * CONFIG.MOON_ORBIT_BAND_FRACTION; b.m1[m] = w; b.m2[m] = phase;
+  b.x[m] = b.px[m] = b.x[p] + b.m0[m] * Math.cos(phase);
+  b.y[m] = b.py[m] = b.y[p] + b.m0[m] * Math.sin(phase);
+  return m;
+}
+
+/** Binary pair around (cx, cy). @param {number} cx @param {number} cy @param {number} sep @param {number} r1 @param {number} r2 @param {number} phase */
+function binary(cx, cy, sep, r1, r2, phase) {
+  const band = 120;
+  const a = addBody(BODY.PLANET, cx, cy, r1, r1 + band, BODY_FLAG.BINARY);
+  const a2 = addBody(BODY.PLANET, cx, cy, r2, r2 + band, BODY_FLAG.BINARY);
+  const pairs = [[a, a2, phase], [a2, a, phase + Math.PI]];
+  for (const [k, partner, ph] of pairs) {
+    b.parent[k] = partner; b.m0[k] = sep / 2; b.m1[k] = CONFIG.BINARY_ANGULAR_SPEED; b.m2[k] = ph;
+    b.m3[k] = cx; b.m4[k] = cy;
+    b.x[k] = b.px[k] = cx + (sep / 2) * Math.cos(ph); b.y[k] = b.py[k] = cy + (sep / 2) * Math.sin(ph);
+  }
+}
+
+/** Hand-placed composition showing zone `z`'s hazard (z = 6 mixes everything). @param {number} z */
+function buildShowcase(z) {
+  const band = z >= 5 ? 128 : 200 - 18 * (z - 1);
+  const home = addBody(BODY.PLANET, 500, 0, 90, 90 + band, BODY_FLAG.HOME);
+  b.pathIndex[home] = 0;
+  path.push(home);
+  const add = (/** @type {number} */ x, /** @type {number} */ y, /** @type {number} */ r, /** @type {number} */ flags) => {
+    const i = addBody(BODY.PLANET, x, y, r, r + band, flags);
+    b.pathIndex[i] = path.length; path.push(i);
+    return i;
+  };
+  if (z === 1) {
+    add(300, 760, 105, BODY_FLAG.RINGED);
+    add(700, 1380, 80, 0);
+  } else if (z === 2) {
+    const p1 = add(640, 820, 105, 0);
+    moon(p1, 20, 1.1, 2.4);
+    moon(p1, 15, 1.1, 2.4 + Math.PI);
+    const p2 = add(300, 1500, 80, BODY_FLAG.RINGED);
+    moon(p2, 18, -1.4, 0.3);
+  } else if (z === 3) {
+    const d1 = add(500, 800, 95, 0);
+    drift(d1, 500, CONFIG.DRIFT_AMPLITUDE, 5, 0.25);
+    const d2 = add(380, 1460, 75, 0);
+    drift(d2, 380, CONFIG.DRIFT_AMPLITUDE, 4.4, 2.6);
+  } else if (z === 4) {
+    addBody(BODY.BLACKHOLE, 290, 820, CONFIG.BLACKHOLE_CORE_RADIUS, CONFIG.BLACKHOLE_INFLUENCE_RADIUS, 0);
+    add(740, 1080, 85, 0);
+    add(380, 1650, 95, BODY_FLAG.RINGED);
+  } else if (z === 5) {
+    binary(520, 900, 400, 80, 64, -0.75);
+    add(260, 1700, 85, 0);
+  } else {
+    const p1 = add(700, 700, 95, 0);
+    moon(p1, 18, 1.2, 1.0);
+    addBody(BODY.BLACKHOLE, 260, 1050, CONFIG.BLACKHOLE_CORE_RADIUS, CONFIG.BLACKHOLE_INFLUENCE_RADIUS, 0);
+    const d1 = add(560, 1500, 70, 0);
+    drift(d1, 560, CONFIG.DRIFT_AMPLITUDE, 5, 1.0);
+    binary(450, 2150, 380, 70, 60, 2.0);
+  }
+}
+
 function addPathPlanet() {
   const first = pathCount === 0;
   const y = first ? 0 : topY + rng.range(640, 860);
@@ -98,7 +175,10 @@ function addPathPlanet() {
     b.parent[m] = i; b.m0[m] = r + 150 * 0.86; b.m1[m] = rng.range(0.8, 1.4) * (rng.next() < 0.5 ? -1 : 1); b.m2[m] = rng.next() * 6.28;
   }
   // Side decorations between this planet and the previous one.
-  if (!first && pathCount % 6 === 3) {
+  if (!first && pathCount % 6 === 1) {
+    const d = addBody(BODY.PLANET, 500, (y + topY) / 2, 55, 55 + 120, BODY_FLAG.DRIFTING);
+    drift(d, x > 500 ? 300 : 700, 120, 4.6, rng.next() * 6.28);
+  } else if (!first && pathCount % 6 === 3) {
     const bx = lastX > 500 && x > 500 ? 150 : lastX < 500 && x < 500 ? 850 : (x > 500 ? 130 : 870);
     addBody(BODY.BLACKHOLE, bx, (y + topY) / 2, CONFIG.BLACKHOLE_CORE_RADIUS, CONFIG.BLACKHOLE_INFLUENCE_RADIUS, 0);
   } else if (!first && pathCount % 6 === 5) {
@@ -172,6 +252,17 @@ function planNext() {
 function resetDemo() {
   b.alive.fill(0); b.count = 0; world.motes.alive.fill(0); world.motes.count = 0;
   path.length = 0; pathCount = 0; cur = 0; topY = 0; lastX = 500;
+  if (SHOW) {
+    buildShowcase(SHOW);
+    orbitR = b.r[path[0]] + 95; theta = -2.2; dir = 1; mode = 0;
+    c.state = COMET.ORBIT; c.body = path[0]; c.bodyId = b.id[path[0]];
+    world.dead = false; world.deathTime = -1; world.started = true;
+    placeOrbit();
+    c.px = c.x; c.py = c.y;
+    world.front.y = world.front.py = c.y - FRONT_GAP;
+    world.score.zone = zone;
+    return;
+  }
   addPathPlanet();
   const h = path[0];
   orbitR = orbitRadiusFor(h, 0); theta = -Math.PI / 2; dir = 1; mode = 0;
@@ -220,7 +311,31 @@ function step(dt) {
     } else if (b.flags[i] & BODY_FLAG.BINARY) {
       const th = b.m2[i] + b.m1[i] * t;
       b.x[i] = b.m3[i] + b.m0[i] * Math.cos(th); b.y[i] = b.m4[i] + b.m0[i] * Math.sin(th);
+    } else if (b.flags[i] & BODY_FLAG.DRIFTING) {
+      b.x[i] = b.m0[i] + b.m1[i] * Math.sin(2 * Math.PI * t / b.m2[i] + b.m3[i]);
     }
+  }
+  // Moons follow their (possibly moving) parent: second pass.
+  for (let i = 0; i < b.count; i++) {
+    if (!b.alive[i] || b.type[i] !== BODY.MOON) continue;
+    const p = b.parent[i];
+    const th = b.m2[i] + b.m1[i] * t;
+    b.x[i] = b.x[p] + b.m0[i] * Math.cos(th); b.y[i] = b.y[p] + b.m0[i] * Math.sin(th);
+  }
+  if (SHOW) {
+    // Circle home forever with a live aim line.
+    theta += dir * (speed / orbitR) * dt;
+    placeOrbit();
+    const aim = world.aim;
+    aim.active = true; aim.x0 = c.x; aim.y0 = c.y;
+    aim.dx = c.vx / speed; aim.dy = c.vy / speed; aim.length = CONFIG.AIM_LINE_LENGTH;
+    aim.target = -1; aim.clear = false;
+    for (let k = 1; k < path.length; k++) {
+      const nb = path[k];
+      if (rayCircle(c.x, c.y, aim.dx, aim.dy, b.x[nb], b.y[nb], b.rc[nb] - 15) > 0) { aim.target = nb; aim.clear = true; break; }
+    }
+    world.front.y = c.y - FRONT_GAP;
+    return;
   }
 
   // Zone cycling.
@@ -336,6 +451,12 @@ const demo = {
   fire(type) { fire(type, c.x, c.y, type === EV.BOUNCE ? -1 : path[cur], 0); },
   /** Advance the demo by `sec` seconds of fixed steps right now (for deterministic screenshots). */
   advance(/** @type {number} */ sec) { for (let s = 0; s < sec / STEP; s++) step(STEP); },
+  /** Switch the zone now (cross-fade) without re-paletting existing bodies. @param {number} z */
+  zone(z) {
+    const prev = zone;
+    zone = z; world.score.zone = z;
+    fire(EV.ZONE_CHANGE, c.x, c.y, z, prev);
+  },
 };
 /** @type {any} */ (window).__demo = demo;
 

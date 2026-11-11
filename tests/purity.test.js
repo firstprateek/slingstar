@@ -78,3 +78,48 @@ test('steady-state steps allocate nothing (V8 total_allocated_bytes)', async (t)
   assert.ok(free < 4, `free-flight step allocates ${free} B`);
   assert.ok(botRun < 400, `bot run allocates ${botRun} B/step amortised`);
 });
+
+test('hazard steps allocate nothing: orbiting a drifting planet with a moon, black holes and moving bodies on the aim ray', async (t) => {
+  if (typeof v8.getHeapStatistics().total_allocated_bytes !== 'number') { t.skip('total_allocated_bytes unavailable'); return; }
+  const { STEP, CONFIG } = await import('../src/config.js');
+  const { COMET } = await import('../src/contracts.js');
+  const h = await import('./helpers.js');
+  const A = () => v8.getHeapStatistics().total_allocated_bytes;
+  const inp = { held: true, pressedThisStep: false, releasedThisStep: false };
+  /** A fresh hazard field with the comet orbiting a drifting planet (no decay: pre-start orbit). */
+  const build = () => {
+    const w = h.emptyWorld();
+    const p = h.addDrifting(w, 500, 3000, 150, 5, 0, 70, 260);
+    h.addMoon(w, p, 140, 1.2, 0, 18);
+    h.addBinary(w, 500, 3900, 200, CONFIG.BINARY_ANGULAR_SPEED, 0, 70, 230);
+    const q = h.addDrifting(w, 300, 4800, 150, 4, 1, 70, 230);
+    h.addMoon(w, q, 140, -1, 2, 18);
+    h.addBlackHole(w, 880, 3500);
+    h.addBlackHole(w, 120, 4300);
+    const c = w.comet;
+    c.state = COMET.ORBIT; c.body = p; c.bodyId = w.bodies.id[p]; c.orbitRadius = 220; c.orbitDir = 1; c.orbitAngle = 0;
+    c.speed = 800; w.started = false; w.front.y = -1e9;
+    return w;
+  };
+  const loop = (w, n) => { for (let k = 0; k < n; k++) { w.step(STEP, inp); w.events.count = 0; } };
+  const w = build();
+  loop(w, 60000);
+  assert.equal(w.dead, false);
+  let best = Infinity;
+  for (let r = 0; r < 5; r++) { const a = A(); loop(w, 100000); best = Math.min(best, (A() - a) / 100000); }
+  // Free flight through a black hole's influence (bend + slingshot bookkeeping).
+  const f = h.emptyWorld();
+  h.addBlackHole(f, 500, 3000);
+  const m = h.addPlanet(f, 900, 9000, 10, 0);
+  h.addMoon(f, m, 100, 1, 0, 18);
+  const reset = () => { h.setFree(f, 680, 2500, 0, 800); };
+  const freeLoop = (n) => { for (let k = 0; k < n; k++) { if (f.comet.y > 3600) reset(); f.step(STEP, { held: false, pressedThisStep: false, releasedThisStep: false }); f.events.count = 0; } };
+  const finp = { held: false, pressedThisStep: false, releasedThisStep: false };
+  const freeLoop2 = (n) => { for (let k = 0; k < n; k++) { if (f.comet.y > 3600) reset(); f.step(STEP, finp); f.events.count = 0; } };
+  reset(); freeLoop(1); freeLoop2(60000);
+  let bestFree = Infinity;
+  for (let r = 0; r < 5; r++) { const a = A(); freeLoop2(100000); bestFree = Math.min(bestFree, (A() - a) / 100000); }
+  t.diagnostic(`bytes/step: hazard orbit with moving aim targets ${best.toFixed(2)}, black-hole free flight ${bestFree.toFixed(2)}`);
+  assert.ok(best < 4, `hazard orbit step allocates ${best} B`);
+  assert.ok(bestFree < 4, `black-hole free flight allocates ${bestFree} B`);
+});

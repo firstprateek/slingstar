@@ -51,7 +51,13 @@ const SFX = [
     audio.onEvent(EV.ZONE_CHANGE, 0, 0, next, prev);
   }],
   ['Slingshot', () => audio.onEvent(EV.SLINGSHOT, 500, 0, 7, 250)],
+  ['Black-hole drone (2s sweep)', () => {
+    const c = audio.core, x = audio.context;
+    if (!c || !x) return;
+    for (let i = 0; i <= 20; i++) setTimeout(() => { const ac = audio.context; if (ac && audio.core) audio.core.sfx.well(i <= 10 ? i / 10 : (20 - i) / 10, ac.currentTime); }, i * 100);
+  }],
   ['Death', () => { world.dead = true; audio.onEvent(EV.DEATH, 500, 0, 0, 3); }],
+  ['Death (black hole)', () => { world.dead = true; audio.onEvent(EV.DEATH, 500, 0, 2, 3); }],
 ];
 
 const sfxRow = $('sfx');
@@ -154,6 +160,8 @@ const BAR = (60 / 108) * 4;
  * @property {number} [rmsB]
  * @property {number} [hfA]       High-frequency (first-difference) RMS in window A (dB).
  * @property {number} [hfB]
+ * @property {number} [peakA]     Sample peak in window A / B (dBFS).
+ * @property {number} [peakB]
  */
 
 /**
@@ -199,6 +207,14 @@ async function render(name, seconds, setup, windows) {
       for (let i = i0; i < i1; i++) { const d = L[i] - L[i - 1], e = R[i] - R[i - 1]; s += (d * d + e * e) * 0.5; }
       return db(Math.sqrt(s / Math.max(1, i1 - i0)));
     };
+    /** @param {number} a @param {number} b */
+    const peakOf = (a, b) => {
+      let p = 0; const i0 = Math.floor(a * SR), i1 = Math.min(L.length, Math.floor(b * SR));
+      for (let i = i0; i < i1; i++) { const x = Math.max(Math.abs(L[i]), Math.abs(R[i])); if (x > p) p = x; }
+      return db(p);
+    };
+    out.peakA = peakOf(windows[0][0], windows[0][1]);
+    out.peakB = peakOf(windows[1][0], windows[1][1]);
     out.rmsA = rmsOf(windows[0][0], windows[0][1]);
     out.rmsB = rmsOf(windows[1][0], windows[1][1]);
     out.hfA = hfOf(windows[0][0], windows[0][1]);
@@ -213,6 +229,43 @@ function playMusic(c, tier, sc, secs) {
   c.music.setTier(tier, 0);
   c.music.start(0);
   c.music.scheduleUntil(secs);
+}
+
+/**
+ * Busy 10 s scenario: everything that can coincide in real play, at the density of a good run.
+ * Music is scheduled in 50 ms chunks interleaved with the events (as the live 25 ms scheduler does),
+ * so tier layers join at the right moments. Window A (4.5–8.8 s) is the loud stretch; B is after death.
+ * @param {import('./engine.js').AudioCore} c
+ */
+function busyScenario(c) {
+  /** @type {[number, (t: number) => void][]} */
+  const ev = [];
+  let combo = 0;
+  for (let t = 0.4; t < 8.9; t += 0.62) {           // a catch every 0.62 s, release 0.3 s later
+    const cb = ++combo;
+    ev.push([t, (x) => c.trigger(EV.LATCH, 0, 0, 0, cb, x)]);
+    if (cb % 2 === 0) ev.push([t + 0.01, (x) => c.trigger(EV.PERFECT, 0, 0, 0, 150, x)]);
+    ev.push([t + 0.3, (x) => c.trigger(EV.RELEASE, 0, 0, 900 + cb * 60, 0, x)]);
+    for (let k = 0; k < 4; k++) ev.push([t + 0.34 + k * 0.05, (x) => c.trigger(EV.MOTE, 0, 0, k, 10, x)]);
+  }
+  for (const [t, tier] of [[1.0, 2], [2.4, 3], [3.6, 4], [4.6, 5]]) ev.push([t, (x) => c.trigger(EV.TIER_UP, 0, 0, tier, tier - 1, x)]);
+  ev.push([2.0, (x) => c.trigger(EV.ZONE_CHANGE, 0, 0, 4, 3, x)]);
+  ev.push([3.0, (x) => c.sfx.graze(true, x)]);
+  ev.push([4.6, (x) => c.sfx.graze(false, x)]);
+  for (const t of [1.7, 5.2, 7.9]) ev.push([t, (x) => c.trigger(EV.BOUNCE, 0, 0, 1, 900, x)]);
+  for (const t of [2.9, 6.6, 8.2]) ev.push([t, (x) => c.trigger(EV.NEAR_MISS, 0, 0, 4, 18, x)]);
+  ev.push([3.3, (x) => c.trigger(EV.COMBO_BREAK, 0, 0, 7, 0, x)]);
+  for (let i = 0; i <= 10; i++) ev.push([5.4 + i * 0.07, (x) => c.sfx.well(i / 10, x)]);   // into a black hole's well…
+  ev.push([6.2, (x) => { c.sfx.well(0, x); c.trigger(EV.SLINGSHOT, 0, 0, 7, 250, x); }]);  // …and out
+  ev.push([9.0, (x) => c.trigger(EV.DEATH, 0, 0, 1, 3, x)]);
+  ev.sort((p, q) => p[0] - q[0]);
+  c.music.setScene(SCREEN.PLAYING, 0);
+  c.music.start(0.02);
+  let i = 0;
+  for (let t = 0; t < 10.4; t += 0.05) {
+    while (i < ev.length && ev[i][0] < t + 0.05) { const [et, fn] = ev[i++]; fn(et); }
+    c.music.scheduleUntil(t + 0.05);
+  }
 }
 
 /** @returns {Promise<Level[]>} */
@@ -237,6 +290,7 @@ async function measureAll() {
     ['sfx zone change', 3.5, EV.ZONE_CHANGE, 2, 1, 0],
     ['sfx slingshot', 2, EV.SLINGSHOT, 7, 250, 0],
     ['sfx death', 3.5, EV.DEATH, 0, 3, 0],
+    ['sfx death (black hole)', 3.5, EV.DEATH, 2, 3, 0],
   ];
   for (const [name, secs, type, a, b] of sfx) {
     res.push(await render(name, secs, (c) => {
@@ -245,6 +299,7 @@ async function measureAll() {
     }));
   }
   res.push(await render('sfx graze loop (1.2s)', 1.8, (c) => { c.sfx.graze(true, T0); c.sfx.graze(false, T0 + 1.2); }));
+  res.push(await render('sfx black-hole drone (full depth 1s)', 1.8, (c) => { c.sfx.well(1, T0); c.sfx.well(0, T0 + 1); }));
   res.push(await render('sfx mote streak ×8', 1.2, (c) => { for (let i = 0; i < 8; i++) c.trigger(EV.MOTE, 0, 0, i, 10, T0 + i * 0.055); }));
 
   res.push(await render('music title (pad, sparse)', two, (c) => playMusic(c, 1, SCREEN.TITLE, two - 0.6)));
@@ -270,6 +325,9 @@ async function measureAll() {
     for (let i = 0; i < 4; i++) c.trigger(EV.MOTE, 0, 0, i, 10, t + i * 0.02);
     c.sfx.graze(true, t);
   }));
+  // A busy 10 s of play, scheduled in time order like the live scheduler (see busyScenario).
+  res.push(await render('busy 10s: tiers 1→5, zone change, catches, motes, graze, slingshot, death at 9s', 10.5, busyScenario,
+    [[4.5, 8.8], [9.4, 10.5]]));
   // Death low-pass on music: RMS before (A: 1.2–2.2s) vs after (B: 2.8–4.4s) death at 2.3s.
   res.push(await render('death low-pass: tier 5 music, death at 2.3s', 4.6, (c) => {
     playMusic(c, 5, SCREEN.PLAYING, 4.6);

@@ -2,40 +2,120 @@
 /**
  * Moons, drifting planets, black holes, binary pairs (PLAN.md §2.5). Pure. Owned by stream A.
  *
- * Phase 1: the generator places only plain planets, but the motion rules below already follow the
- * contracts.js motion params so Phase 3 hazards only need generator support. Positions are pure
- * functions of world.time, which keeps the sim deterministic. No allocation.
+ * Every moving body's position is a pure function of world.time (contracts.js motion params), so
+ * the sim is deterministic AND any future position can be predicted exactly: the aim line uses
+ * `posAt` to check a release against where moons and drifting / binary planets WILL be when the
+ * comet gets there, and the generator uses `envelopeOf` (the whole region a body sweeps) for
+ * conservative solvability checks. No allocation: inputs and outputs go through the module-level
+ * typed arrays below (a double passed to or returned from a function V8 does not inline is boxed).
  */
 import { CONFIG } from '../config.js';
 import { BODY, BODY_FLAG } from '../contracts.js';
 import { TAU } from '../core/math.js';
 
+/** Black-hole pull (aliases of config.js, read once). */
+const BH_G = CONFIG.BLACKHOLE_G, BH_MAX = CONFIG.BLACKHOLE_MAX_ACCEL;
+
+/** Body flags whose position changes with time (moons move too: check `type`). */
+export const MOVING_FLAGS = BODY_FLAG.DRIFTING | BODY_FLAG.BINARY;
+
+/** posAt input: MT[0] = absolute world time. */
+export const MT = new Float64Array(1);
+/** posAt output: MP[0], MP[1] = centre at time MT[0]. */
+export const MP = new Float64Array(2);
+/**
+ * envelopeOf output: the body's centre sweeps the segment (ENV[0], ENV[1]) → (ENV[2], ENV[3])
+ * thickened by ENV[4] (static: a point; drifting: a horizontal segment; binary: its orbit circle
+ * as a point with reach m0; moon: its parent's envelope with reach + m0).
+ */
+export const ENV = new Float64Array(5);
+
+/** @param {import('../contracts.js').Bodies} b @param {number} i */
+export function isMoving(b, i) {
+  return b.type[i] === BODY.MOON || (b.flags[i] & MOVING_FLAGS) !== 0;
+}
+
+/** Non-moon centre at time MT[0] into MP. @param {import('../contracts.js').Bodies} b @param {number} i */
+function baseAt(b, i) {
+  const f = b.flags[i], t = MT[0];
+  if (f & BODY_FLAG.BINARY) {
+    const th = b.m2[i] + b.m1[i] * t;
+    MP[0] = b.m3[i] + b.m0[i] * Math.cos(th);
+    MP[1] = b.m4[i] + b.m0[i] * Math.sin(th);
+  } else if (f & BODY_FLAG.DRIFTING) {
+    MP[0] = b.m0[i] + b.m1[i] * Math.sin(TAU * t / b.m2[i] + b.m3[i]);
+    MP[1] = b.y[i];
+  } else {
+    MP[0] = b.x[i]; MP[1] = b.y[i];
+  }
+}
+
+/**
+ * Centre of body i at absolute time MT[0], written to MP. Static bodies return their current
+ * position. A moon whose parent is gone stays where it is.
+ * @param {import('../contracts.js').Bodies} b @param {number} i
+ */
+export function posAt(b, i) {
+  if (b.type[i] !== BODY.MOON) { baseAt(b, i); return; }
+  const p = b.parent[i];
+  if (p < 0 || !b.alive[p]) { MP[0] = b.x[i]; MP[1] = b.y[i]; return; }
+  baseAt(b, p);
+  const th = b.m2[i] + b.m1[i] * MT[0];
+  MP[0] += b.m0[i] * Math.cos(th);
+  MP[1] += b.m0[i] * Math.sin(th);
+}
+
+/** Non-moon motion envelope into ENV. @param {import('../contracts.js').Bodies} b @param {number} i */
+function baseEnvelope(b, i) {
+  const f = b.flags[i];
+  if (f & BODY_FLAG.BINARY) {
+    ENV[0] = ENV[2] = b.m3[i]; ENV[1] = ENV[3] = b.m4[i]; ENV[4] = b.m0[i];
+  } else if (f & BODY_FLAG.DRIFTING) {
+    const a = Math.abs(b.m1[i]);
+    ENV[0] = b.m0[i] - a; ENV[2] = b.m0[i] + a; ENV[1] = ENV[3] = b.y[i]; ENV[4] = 0;
+  } else {
+    ENV[0] = ENV[2] = b.x[i]; ENV[1] = ENV[3] = b.y[i]; ENV[4] = 0;
+  }
+}
+
+/**
+ * Region swept by body i's centre over all time, into ENV (segment + reach). Add the body's own
+ * radius (or ring) to get the region the body or its ring can ever cover.
+ * @param {import('../contracts.js').Bodies} b @param {number} i
+ */
+export function envelopeOf(b, i) {
+  if (b.type[i] !== BODY.MOON) { baseEnvelope(b, i); return; }
+  const p = b.parent[i];
+  if (p < 0 || !b.alive[p]) { ENV[0] = ENV[2] = b.x[i]; ENV[1] = ENV[3] = b.y[i]; ENV[4] = 0; return; }
+  baseEnvelope(b, p);
+  ENV[4] += b.m0[i];
+}
+
 /**
  * Move every body whose position is a function of time. Called once per step, after the previous
- * positions were stored. Parents are updated before moons by doing moons in a second pass.
+ * positions were stored.
  * @param {import('../contracts.js').WorldT} world
  */
 export function updateBodyMotion(world) {
-  const b = world.bodies, t = world.time, n = b.count;
+  const b = world.bodies, n = b.count;
+  MT[0] = world.time;
   for (let i = 0; i < n; i++) {
-    if (!b.alive[i] || b.type[i] === BODY.MOON) continue;
-    const f = b.flags[i];
-    if (f & BODY_FLAG.BINARY) {
-      const th = b.m2[i] + b.m1[i] * t;
-      b.x[i] = b.m3[i] + b.m0[i] * Math.cos(th);
-      b.y[i] = b.m4[i] + b.m0[i] * Math.sin(th);
-    } else if (f & BODY_FLAG.DRIFTING) {
-      b.x[i] = b.m0[i] + b.m1[i] * Math.sin(TAU * t / b.m2[i] + b.m3[i]);
-    }
+    if (!b.alive[i] || !isMoving(b, i)) continue;
+    posAt(b, i);
+    b.x[i] = MP[0]; b.y[i] = MP[1];
   }
-  for (let i = 0; i < n; i++) {
-    if (!b.alive[i] || b.type[i] !== BODY.MOON) continue;
-    const p = b.parent[i];
-    if (p < 0 || !b.alive[p]) continue;
-    const th = b.m2[i] + b.m1[i] * t;
-    b.x[i] = b.x[p] + b.m0[i] * Math.cos(th);
-    b.y[i] = b.y[p] + b.m0[i] * Math.sin(th);
-  }
+}
+
+/**
+ * Put a freshly written moving body at its position for the current world time, with the
+ * previous position equal (so the renderer does not interpolate from a stale slot).
+ * @param {import('../contracts.js').WorldT} world @param {number} i
+ */
+export function placeMotion(world, i) {
+  const b = world.bodies;
+  MT[0] = world.time;
+  posAt(b, i);
+  b.x[i] = b.px[i] = MP[0]; b.y[i] = b.py[i] = MP[1];
 }
 
 /**
@@ -44,18 +124,20 @@ export function updateBodyMotion(world) {
  * @param {import('../contracts.js').WorldT} world @param {Float64Array} out
  */
 export function blackHoleAccel(world, out) {
-  out[0] = 0; out[1] = 0;
   const b = world.bodies, c = world.comet, n = b.count;
+  const cx = c.x, cy = c.y;
+  let ax = 0, ay = 0;
   for (let i = 0; i < n; i++) {
     if (!b.alive[i] || b.type[i] !== BODY.BLACKHOLE) continue;
-    const dx = b.x[i] - c.x, dy = b.y[i] - c.y;
+    const dx = b.x[i] - cx, dy = b.y[i] - cy;
     const d2 = dx * dx + dy * dy;
     const rc = b.rc[i];
     if (d2 > rc * rc || d2 < 1) continue;
     const d = Math.sqrt(d2);
-    let a = CONFIG.BLACKHOLE_G / d2;
-    if (a > CONFIG.BLACKHOLE_MAX_ACCEL) a = CONFIG.BLACKHOLE_MAX_ACCEL;
-    out[0] += (dx / d) * a;
-    out[1] += (dy / d) * a;
+    const g = BH_G / d2;
+    const a = g < BH_MAX ? g : BH_MAX;
+    ax += (dx / d) * a;
+    ay += (dy / d) * a;
   }
+  out[0] = ax; out[1] = ay;
 }

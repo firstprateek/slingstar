@@ -34,9 +34,18 @@ const AUTOPLAY = params.get('autoplay') === '1';
 const seedParam = params.get('seed');
 const FIXED_SEED = seedParam != null && seedParam !== '' && Number.isFinite(Number(seedParam))
   ? Number(seedParam) >>> 0 : -1;
+/**
+ * ?fast=N (with ?autoplay=1 only): run the sim N× real time (1..8), so tests reach late zones sooner.
+ * `window.__slingstar.fast` can change it at runtime (autoplay only), e.g. back to 1 for a screenshot:
+ * the camera follows in real time, so at N > 1 it trails the comet.
+ */
+const fastParam = Math.floor(Number(params.get('fast')));
+let fast = AUTOPLAY && fastParam > 1 ? Math.min(fastParam, 8) : 1;
 
 const PROMPT_RELEASE = 'RELEASE to fling';
 const PROMPT_HOLD = 'HOLD to catch';
+/** After resuming mid-orbit the comet keeps orbiting on its own until the player's next press. */
+const PROMPT_RESUME = 'TAP to fling';
 
 /** Accent colour per palette, precomputed so zone changes write prebuilt strings. */
 const ACCENT_HEX = ZONES.map((z) => z.accent);
@@ -58,6 +67,11 @@ function todayKey() {
   return String(d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate());
 }
 
+/** Short local date for the Daily chip, e.g. "Nov 10". Falls back to "today". */
+function todayLabel() {
+  try { return new Date().toLocaleDateString(undefined, { month: 'short', day: 'numeric' }); } catch { return 'today'; }
+}
+
 /** @type {import('./contracts.js').Settings} */
 const settings = (() => {
   /** @type {any} */
@@ -77,11 +91,11 @@ const firstRun = (() => {
 })();
 const saveFirstRun = () => storage.set(STORAGE.FIRST_RUN, firstRun);
 
-/** @param {string} mode */
-const bestKey = (mode) => (mode === MODE.DAILY ? STORAGE.BEST_DAILY_PREFIX + todayKey() : STORAGE.BEST_ENDLESS);
-/** @param {string} mode */
-const readBest = (mode) => {
-  const v = Number(storage.get(bestKey(mode), 0));
+/** @param {string} mode @param {string} [day] YYYYMMDD of the run (default today) */
+const bestKey = (mode, day) => (mode === MODE.DAILY ? STORAGE.BEST_DAILY_PREFIX + (day || todayKey()) : STORAGE.BEST_ENDLESS);
+/** @param {string} mode @param {string} [day] */
+const readBest = (mode, day) => {
+  const v = Number(storage.get(bestKey(mode, day), 0));
   return Number.isFinite(v) && v > 0 ? Math.floor(v) : 0;
 };
 
@@ -160,6 +174,15 @@ function boot(renderer) {
   let overT = -1;
   let timeScale = 1;
 
+  /** Local date (YYYYMMDD) the current run's Daily seed and best belong to. */
+  let runDay = todayKey();
+  /**
+   * Resume latch: after "Tap to resume" / Resume mid-orbit, feed held=true to the sim so the comet
+   * keeps orbiting (pause/hide dropped the real hold, and the sim treats held=false as a release).
+   * Cleared by the next real press (then real input takes over), death, leaving the orbit or a new run.
+   */
+  let resumeHold = false;
+
   /** @type {import('./contracts.js').GameOverData} */
   const overData = { score: 0, best: 0, newBest: false, zone: 1, bestCombo: 0, mode: settings.mode };
   let accentPal = -1;
@@ -188,7 +211,10 @@ function boot(renderer) {
       audio.unlock();
       audio.resume();
       input.reset();
-      if (screen === SCREEN.PAUSED || screen === SCREEN.RESUME) go(SCREEN.PLAYING);
+      if (screen === SCREEN.PAUSED || screen === SCREEN.RESUME) {
+        resumeHold = !AUTOPLAY && world.started && !world.dead && world.comet.state === COMET.ORBIT;
+        go(SCREEN.PLAYING);
+      }
     },
     onRestart() {
       audio.unlock();
@@ -209,6 +235,8 @@ function boot(renderer) {
     },
     onShow() {
       pageHidden = false;
+      // Back on the title after midnight: today's Daily is a new course.
+      if (screen === SCREEN.TITLE && settings.mode === MODE.DAILY && runDay !== todayKey()) { newRun(); showTitle(); }
       updateRunning();
       // TITLE / GAMEOVER carry on; audio comes back with the next tap (input onGesture → unlock).
     },
@@ -248,18 +276,21 @@ function boot(renderer) {
   }
 
   function showTitle() {
-    go(SCREEN.TITLE, { best: readBest(settings.mode), mode: settings.mode, sound: settings.sound });
+    // The single title instruction: first run shows the HUD prompt "RELEASE to fling" in place of the hint.
+    document.documentElement.classList.toggle('first-run', !AUTOPLAY && !firstRun.released);
+    go(SCREEN.TITLE, { best: readBest(settings.mode), mode: settings.mode, sound: settings.sound, daily: todayLabel() });
   }
 
   /** Reset everything for a new run in place (no allocation-heavy work: well under 300ms). */
   function newRun() {
+    runDay = todayKey();
     world.reset(runSeed(settings.mode), settings.mode);
     bot.reset();
     renderer.resetRun(world);
     audio.resetRun();
     hud.resetRun();
     nearT = -1; deathT = -1; timeScale = 1; acc = 0;
-    botHeld = false; pendPressed = false; pendReleased = false;
+    botHeld = false; pendPressed = false; pendReleased = false; resumeHold = false;
     setAccent(1);
   }
 
@@ -273,9 +304,9 @@ function boot(renderer) {
   /** Death: record the best score and fill the game-over card. */
   function onDeath() {
     const s = world.score;
-    const prev = readBest(world.mode);
+    const prev = readBest(world.mode, runDay);
     const newBest = s.score > prev && s.score > 0;
-    if (newBest && !AUTOPLAY) storage.set(bestKey(world.mode), s.score);
+    if (newBest && !AUTOPLAY) storage.set(bestKey(world.mode, runDay), s.score);
     overData.score = s.score;
     overData.best = newBest ? s.score : prev;
     overData.newBest = newBest;
@@ -307,7 +338,10 @@ function boot(renderer) {
         break;
       case EV.RELEASE:
         if (screen === SCREEN.TITLE) go(SCREEN.PLAYING);
-        if (!AUTOPLAY && !firstRun.released) { firstRun.released = true; saveFirstRun(); }
+        if (!AUTOPLAY && !firstRun.released) {
+          firstRun.released = true; saveFirstRun();
+          document.documentElement.classList.remove('first-run');
+        }
         break;
       case EV.LATCH:
         if (!AUTOPLAY && !firstRun.caught && world.started) { firstRun.caught = true; saveFirstRun(); }
@@ -366,10 +400,26 @@ function boot(renderer) {
     return ts;
   }
 
+  /**
+   * Whether the free comet is still inside the capture ring of the planet it just left. A press
+   * there re-latches that planet, so "HOLD to catch" waits until the comet is clear of it.
+   */
+  function insideLastRing() {
+    const c = world.comet, b = world.bodies;
+    if (c.lastBodyId === 0) return false;
+    for (let i = 0, n = b.count; i < n; i++) {
+      if (b.alive[i] === 0 || b.id[i] !== c.lastBodyId) continue;
+      const dx = c.x - b.x[i], dy = c.y - b.y[i], rc = b.rc[i];
+      return dx * dx + dy * dy < rc * rc;
+    }
+    return false;
+  }
+
   function updatePrompt() {
     if (AUTOPLAY || world.dead || (screen !== SCREEN.TITLE && screen !== SCREEN.PLAYING)) { hud.prompt(null); return; }
-    if (!world.started) hud.prompt(firstRun.released ? null : PROMPT_RELEASE);
-    else hud.prompt(!firstRun.caught && world.comet.state === COMET.FREE ? PROMPT_HOLD : null);
+    if (resumeHold) hud.prompt(PROMPT_RESUME);
+    else if (!world.started) hud.prompt(firstRun.released ? null : PROMPT_RELEASE);
+    else hud.prompt(!firstRun.caught && world.comet.state === COMET.FREE && !insideLastRing() ? PROMPT_HOLD : null);
   }
 
   /** @param {number} now */
@@ -388,10 +438,10 @@ function boot(renderer) {
       if (sampled.pressedThisStep) pendPressed = true;
       if (sampled.releasedThisStep) pendReleased = true;
       timeScale = slowMotion(dtReal);
-      acc += dtReal * timeScale;
+      acc += dtReal * timeScale * fast;
       const t0 = DEBUG ? performance.now() : 0;
       let steps = 0;
-      while (acc >= STEP && steps < CONFIG.MAX_STEPS_PER_FRAME) {
+      while (acc >= STEP && steps < CONFIG.MAX_STEPS_PER_FRAME * fast) {
         if (AUTOPLAY) {
           const h = bot.decide(world);
           simIn.held = h;
@@ -399,7 +449,10 @@ function boot(renderer) {
           simIn.releasedThisStep = !h && botHeld;
           botHeld = h;
         } else {
-          simIn.held = sampled.held;
+          // Resume latch hands over to real input on the first real press (a quick tap = press +
+          // release, so it flings right away; a press-and-hold keeps orbiting until let go).
+          if (resumeHold && (pendPressed || sampled.held || world.dead || world.comet.state !== COMET.ORBIT)) resumeHold = false;
+          simIn.held = resumeHold || sampled.held;
           simIn.pressedThisStep = pendPressed;
           simIn.releasedThisStep = pendReleased;
           pendPressed = false; pendReleased = false;
@@ -438,6 +491,15 @@ function boot(renderer) {
     restart() { restart(); },
   };
   /** @type {any} */ (window).__slingstar = handle;
+  // Extra test hooks (tools/smoke.mjs): audio state and the resume latch.
+  Object.defineProperty(handle, 'audioState', { get: () => audio.state, enumerable: true });
+  Object.defineProperty(handle, 'resumeHold', { get: () => resumeHold, enumerable: true });
+  Object.defineProperty(handle, 'audio', { value: audio });
+  Object.defineProperty(handle, 'fast', {
+    get: () => fast,
+    set: (/** @type {number} */ n) => { if (AUTOPLAY) fast = Math.max(1, Math.min(8, Math.floor(Number(n)) || 1)); },
+    enumerable: true,
+  });
 
   // ---------------------------------------------------------------- resize / motion preference
   const onResize = () => renderer.resize();
@@ -447,6 +509,7 @@ function boot(renderer) {
   if (reducedQuery) {
     const onMotion = () => { reducedMotion = reducedQuery.matches; renderer.setReducedMotion(reducedMotion); };
     if (typeof reducedQuery.addEventListener === 'function') reducedQuery.addEventListener('change', onMotion);
+    else if (typeof reducedQuery.addListener === 'function') reducedQuery.addListener(onMotion);   // Safari < 14
   }
 
   // ---------------------------------------------------------------- start

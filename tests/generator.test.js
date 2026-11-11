@@ -6,7 +6,7 @@ import { createWorld } from '../src/sim/world.js';
 import { createGenerator, releaseWindowDeg } from '../src/sim/generator.js';
 import { solveWindowDeg, zoneOfPathIndex, captureBand } from '../src/sim/scoring.js';
 import { CONFIG } from '../src/config.js';
-import { BODY } from '../src/contracts.js';
+import { BODY, BODY_FLAG } from '../src/contracts.js';
 
 const SEEDS = 200, PATH = 60;
 /** A pair (k-1, k) is final once path k + LOOKAHEAD has been placed. */
@@ -35,8 +35,10 @@ function generate(seed, onPair) {
   return { w, gen };
 }
 
-test(`solvability: ${SEEDS} seeds × ${PATH} path planets, every consecutive pair has its window`, (t) => {
+test(`solvability: ${SEEDS} seeds × ${PATH} path planets, every consecutive pair has its window (hazard zones included)`, (t) => {
   let pairs = 0, minMargin = Infinity, worst = '', rerolls = 0, fallbacks = 0;
+  // Pairs whose check really involved each hazard (zones 1–6 are all inside 60 path planets).
+  const withHazard = { moonOnA: 0, moonOnB: 0, drifting: 0, binary: 0, blackHoleBeside: 0 };
   for (let seed = 1; seed <= SEEDS; seed++) {
     const { gen } = generate(seed, (w, a, b, k) => {
       const req = solveWindowDeg(zoneOfPathIndex(k));
@@ -44,11 +46,49 @@ test(`solvability: ${SEEDS} seeds × ${PATH} path planets, every consecutive pai
       if (win - req < minMargin) { minMargin = win - req; worst = `seed ${seed} pair ${k - 1}→${k}: ${win.toFixed(1)}° (need ${req.toFixed(1)}°)`; }
       assert.ok(win >= req, `seed ${seed} pair ${k - 1}→${k}: window ${win}° < ${req}°`);
       pairs++;
+      const bd = w.bodies;
+      let moonA = false, moonB = false, bh = false;
+      const ylo = Math.min(bd.y[a], bd.y[b]) - 400, yhi = Math.max(bd.y[a], bd.y[b]) + 400;
+      for (let i = 0; i < bd.count; i++) {
+        if (!bd.alive[i]) continue;
+        if (bd.type[i] === BODY.MOON && bd.parent[i] === a) moonA = true;
+        if (bd.type[i] === BODY.MOON && bd.parent[i] === b) moonB = true;
+        if (bd.type[i] === BODY.BLACKHOLE && bd.y[i] > ylo && bd.y[i] < yhi) bh = true;
+      }
+      if (moonA) withHazard.moonOnA++;
+      if (moonB) withHazard.moonOnB++;
+      if ((bd.flags[a] | bd.flags[b]) & BODY_FLAG.DRIFTING) withHazard.drifting++;
+      if ((bd.flags[a] | bd.flags[b]) & BODY_FLAG.BINARY) withHazard.binary++;
+      if (bh) withHazard.blackHoleBeside++;
     });
     rerolls += gen.rerolls; fallbacks += gen.fallbacks;
   }
-  t.diagnostic(`${pairs} pairs checked; tightest: ${worst}; re-rolls ${rerolls}, fallbacks ${fallbacks}`);
+  t.diagnostic(`${pairs} pairs checked; tightest: ${worst}; re-rolls ${rerolls}, fallbacks ${fallbacks}; ` +
+    `pairs with hazards ${JSON.stringify(withHazard)}`);
   assert.equal(pairs, SEEDS * PATH);
+  for (const [k, n] of Object.entries(withHazard)) assert.ok(n >= SEEDS, `only ${n} pairs with ${k}`);
+});
+
+test('zone elements: none before its zone (moons 2, drift 3, black holes 4, binaries 5); each present in its zone', () => {
+  const intro = { moon: 2, drift: 3, blackhole: 4, binary: 5 };
+  const present = { moon: 0, drift: 0, blackhole: 0, binary: 0 };
+  const N = 60;
+  for (let seed = 1; seed <= N; seed++) {
+    const seen = {};
+    generate(seed, (w) => {
+      const bd = w.bodies;
+      for (let i = 0; i < bd.count; i++) {
+        if (!bd.alive[i]) continue;
+        const k = bd.type[i] === BODY.MOON ? 'moon' : bd.type[i] === BODY.BLACKHOLE ? 'blackhole'
+          : bd.flags[i] & BODY_FLAG.BINARY ? 'binary' : bd.flags[i] & BODY_FLAG.DRIFTING ? 'drift' : null;
+        if (!k) continue;
+        assert.ok(bd.zone[i] >= intro[k], `seed ${seed}: ${k} in zone ${bd.zone[i]}`);
+        if (bd.zone[i] === intro[k]) seen[k] = 1;
+      }
+    });
+    for (const k of Object.keys(seen)) present[k]++;
+  }
+  for (const k of Object.keys(intro)) assert.ok(present[k] >= 0.9 * N, `${k} in its zone on only ${present[k]}/${N} seeds`);
 });
 
 test('path planets follow the zone rules (radius, capture band, spacing, x range) and pools stay bounded', () => {

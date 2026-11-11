@@ -2,7 +2,7 @@
 import { createWorld } from '../src/sim/world.js';
 import { createBot } from '../src/sim/bot.js';
 import { CONFIG, STEP } from '../src/config.js';
-import { BODY, COMET, EV } from '../src/contracts.js';
+import { BODY, BODY_FLAG, COMET, EV } from '../src/contracts.js';
 
 export { STEP };
 
@@ -91,4 +91,51 @@ export function botRun(seed, { stopAt = Infinity, maxTime = 180, onEvent, onStep
     q.count = 0;
   }
   return { w, dead: w.dead, cause, pathReached: w.score.pathReached, time: w.time, zone: w.score.zone };
+}
+
+// ------------------------------------------------------------------ Phase 3 hazard builders
+// (motion params as documented in contracts.js; positions are set for the world's current time)
+
+/** Add a moon circling `parent` at orbit radius `orbitR`, `rate` rad/s (signed), phase `phase`. */
+export function addMoon(w, parent, orbitR, rate, phase, r = 18) {
+  const b = w.bodies;
+  const i = addPlanet(w, 0, 0, r, 0);
+  b.type[i] = BODY.MOON; b.parent[i] = parent;
+  b.m0[i] = orbitR; b.m1[i] = rate; b.m2[i] = phase;
+  const th = phase + rate * w.time;
+  b.x[i] = b.px[i] = b.x[parent] + orbitR * Math.cos(th);
+  b.y[i] = b.py[i] = b.y[parent] + orbitR * Math.sin(th);
+  return i;
+}
+
+/** Add a black hole (core radius `core`, influence radius `influence`). */
+export function addBlackHole(w, x, y, core = CONFIG.BLACKHOLE_CORE_RADIUS, influence = CONFIG.BLACKHOLE_INFLUENCE_RADIUS) {
+  const i = addPlanet(w, x, y, core, influence);
+  w.bodies.type[i] = BODY.BLACKHOLE;
+  return i;
+}
+
+/** Add a drifting planet: x = baseX + amp sin(2π t / period + phase). */
+export function addDrifting(w, baseX, y, amp, period, phase, r = 80, rc = 250, pathIndex = -1) {
+  const b = w.bodies;
+  const i = addPlanet(w, baseX, y, r, rc, pathIndex);
+  b.flags[i] = BODY_FLAG.DRIFTING;
+  b.m0[i] = baseX; b.m1[i] = amp; b.m2[i] = period; b.m3[i] = phase;
+  b.x[i] = b.px[i] = baseX + amp * Math.sin((2 * Math.PI * w.time) / period + phase);
+  return i;
+}
+
+/** Add a binary pair circling (cx, cy) at radius `half`, `rate` rad/s, member 1 at `phase`. Returns [a, b]. */
+export function addBinary(w, cx, cy, half, rate, phase, r = 70, rc = 230, pathIndex = -1) {
+  const b = w.bodies;
+  const ids = [];
+  for (let k = 0; k < 2; k++) {
+    const th = phase + Math.PI * k;
+    const i = addPlanet(w, cx + half * Math.cos(th + rate * w.time), cy + half * Math.sin(th + rate * w.time), r, rc, pathIndex);
+    b.flags[i] = BODY_FLAG.BINARY;
+    b.m0[i] = half; b.m1[i] = rate; b.m2[i] = th; b.m3[i] = cx; b.m4[i] = cy;
+    ids.push(i);
+  }
+  b.parent[ids[0]] = ids[1]; b.parent[ids[1]] = ids[0];
+  return ids;
 }

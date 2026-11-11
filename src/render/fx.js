@@ -51,16 +51,14 @@ export function createFx() {
   let pulseNext = 0;
 
   /**
-   * @param {number} relX @param {number} relY @param {number} hx @param {number} hy
-   * @param {number} cos @param {number} sin @param {number} shape @param {number} param
-   * @param {number} r @param {number} g @param {number} b @param {number} k intensity
+   * Sprite staging: rel x, rel y, half x, half y, cos, sin, shape, param, r, g, b, intensity.
+   * Filled by the caller, then commitSprite() appends it (no doubles passed as call arguments).
    */
-  function sprite(relX, relY, hx, hy, cos, sin, shape, param, r, g, b, k) {
+  const S = new Float64Array(SSTRIDE);
+  function commitSprite() {
     if (spriteCount >= MAX_SPRITES) return;
     const o = spriteCount * SSTRIDE;
-    sprites[o] = relX; sprites[o + 1] = relY; sprites[o + 2] = hx; sprites[o + 3] = hy;
-    sprites[o + 4] = cos; sprites[o + 5] = sin; sprites[o + 6] = shape; sprites[o + 7] = param;
-    sprites[o + 8] = r; sprites[o + 9] = g; sprites[o + 10] = b; sprites[o + 11] = k;
+    for (let k = 0; k < SSTRIDE; k++) sprites[o + k] = S[k];
     spriteCount++;
   }
 
@@ -96,6 +94,22 @@ export function createFx() {
       gl.enableVertexAttribArray(0);
       gl.vertexAttribPointer(0, 4, gl.FLOAT, false, 16, 0);
       gl.bindVertexArray(null);
+    },
+
+    /** Warm-up content: one sprite of every shape and a short trail strip near the view centre. */
+    warm() {
+      spriteCount = 0;
+      for (let k = 0; k < 5; k++) {
+        S[0] = k * 40 - 80; S[1] = 0; S[2] = 24; S[3] = 24; S[4] = 1; S[5] = 0; S[6] = k; S[7] = 0.5;
+        S[8] = 1; S[9] = 1; S[10] = 1; S[11] = 1;
+        commitSprite();
+      }
+      for (let k = 0; k < 4; k++) {
+        const o = k * 4;
+        trailVerts[o] = (k & 1) ? 10 : -10; trailVerts[o + 1] = (k >> 1) * 40;
+        trailVerts[o + 2] = (k & 1) ? 1 : -1; trailVerts[o + 3] = (k >> 1) * 0.5;
+      }
+      trailCount = 4;
     },
 
     reset() {
@@ -179,7 +193,9 @@ export function createFx() {
           const k = (1 - f * f * 0.85) * (s < 50 ? (s - 20) / 30 : 1);
           if (k <= 0) continue;
           const sz = clear ? 15 : 13;
-          sprite(ox + aim.dx * s, oy + aim.dy * s, sz, sz, 1, 0, SHAPE.DOT, 0, r, g, b, k);
+          S[0] = ox + aim.dx * s; S[1] = oy + aim.dy * s; S[2] = sz; S[3] = sz; S[4] = 1; S[5] = 0;
+          S[6] = SHAPE.DOT; S[7] = 0; S[8] = r; S[9] = g; S[10] = b; S[11] = k;
+          commitSprite();
         }
       }
       // Stardust motes.
@@ -191,8 +207,10 @@ export function createFx() {
         const ph = (i * 2.399) % 6.283;
         const tw = 0.5 + 0.5 * Math.sin(time * 4.1 + ph);
         const rot = time * 0.7 + ph;
-        sprite(m.x[i] - vx, ry, 24, 24, Math.cos(rot), Math.sin(rot), SHAPE.MOTE, tw,
-          1.0 + accent[0] * 0.5, 0.86 + accent[1] * 0.4, 0.55 + accent[2] * 0.4, 1.2);
+        S[0] = m.x[i] - vx; S[1] = ry; S[2] = 24; S[3] = 24; S[4] = Math.cos(rot);
+        S[5] = Math.sin(rot); S[6] = SHAPE.MOTE; S[7] = tw; S[8] = 1.0 + accent[0] * 0.5;
+        S[9] = 0.86 + accent[1] * 0.4; S[10] = 0.55 + accent[2] * 0.4; S[11] = 1.2;
+        commitSprite();
       }
       // Ring pulses.
       for (let p = 0; p < PULSES; p++) {
@@ -205,8 +223,10 @@ export function createFx() {
         const e = 1 - (1 - t) * (1 - t) * (1 - t);
         const R = pulse[o + 4];
         const fadeK = (1 - t) * (1 - t) * 1.6;
-        sprite(pulse[o] - vx, pulse[o + 1] - vy, R, R, 1, 0, SHAPE.RING, e * 0.96 + 0.02,
-          pulse[o + 5], pulse[o + 6], pulse[o + 7], fadeK);
+        S[0] = pulse[o] - vx; S[1] = pulse[o + 1] - vy; S[2] = R; S[3] = R; S[4] = 1; S[5] = 0;
+        S[6] = SHAPE.RING; S[7] = e * 0.96 + 0.02; S[8] = pulse[o + 5]; S[9] = pulse[o + 6];
+        S[10] = pulse[o + 7]; S[11] = fadeK;
+        commitSprite();
       }
       // Comet head.
       const c = world.comet;
@@ -215,9 +235,14 @@ export function createFx() {
         const hy = 30;
         const asp = 1 + Math.min(sp, 2400) * 0.00055;
         const ch = Math.cos(c.heading), sh = Math.sin(c.heading);
-        sprite(cam.cometX - vx, cam.cometY - vy, hy * asp, hy, ch, sh, SHAPE.HEAD, asp, tier[0], tier[1], tier[2], 1);
+        S[0] = cam.cometX - vx; S[1] = cam.cometY - vy; S[2] = hy * asp; S[3] = hy; S[4] = ch;
+        S[5] = sh; S[6] = SHAPE.HEAD; S[7] = asp; S[8] = tier[0]; S[9] = tier[1]; S[10] = tier[2];
+        S[11] = 1;
+        commitSprite();
         // Wide soft halo for presence.
-        sprite(cam.cometX - vx, cam.cometY - vy, 90, 90, 1, 0, SHAPE.GLOW, 0, tier[0], tier[1], tier[2], 0.22);
+        S[0] = cam.cometX - vx; S[1] = cam.cometY - vy; S[2] = 90; S[3] = 90; S[4] = 1; S[5] = 0;
+        S[6] = SHAPE.GLOW; S[7] = 0; S[8] = tier[0]; S[9] = tier[1]; S[10] = tier[2]; S[11] = 0.22;
+        commitSprite();
       }
     },
 
@@ -247,7 +272,7 @@ export function createFx() {
       gl.uniform1f(u.uTime, time % 3600);
       gl.uniform1f(u.uGlowTop, FRONT_GLOW_ABOVE - 40);
       gl.enable(gl.BLEND);
-      gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+      gl.blendFunc(gfx.src, gl.ONE_MINUS_SRC_ALPHA);
       gl.bindVertexArray(gfx.emptyVao);
       gfx.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     },
@@ -264,7 +289,7 @@ export function createFx() {
       gl.uniform2f(trailProg.u.uScale, sx, sy);
       gl.uniform3f(trailProg.u.uColor, trailColor[0], trailColor[1], trailColor[2]);
       gl.enable(gl.BLEND);
-      gl.blendFunc(gl.ONE, gl.ONE);
+      gl.blendFunc(gfx.src, gl.ONE);
       gl.bindVertexArray(trailVao);
       gfx.drawArrays(gl.TRIANGLE_STRIP, 0, n);
       gl.bindVertexArray(null);
@@ -281,7 +306,7 @@ export function createFx() {
       gl.useProgram(spriteProg.prog);
       gl.uniform2f(spriteProg.u.uScale, sx, sy);
       gl.enable(gl.BLEND);
-      gl.blendFunc(gl.ONE, gl.ONE);
+      gl.blendFunc(gfx.src, gl.ONE);
       gl.bindVertexArray(spriteVao);
       gfx.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, n);
       gl.bindVertexArray(null);

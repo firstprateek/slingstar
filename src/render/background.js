@@ -33,7 +33,10 @@ const NEB_LEVELS = Math.log2(NEB_SIZE) + 1;
 const wrap = (a, p) => ((a % p) + p) % p;
 
 const UNIFORMS = ['uRes', 'uView', 'uBase', 'uZoom', 'uCamX', 'uStar0', 'uStar1', 'uStar2', 'uNeb',
-  'uNebTile', 'uFade', 'uTexPrev', 'uTexCur', 'uPal', 'uTime', 'uWall'];
+  'uNebTile', 'uFade', 'uTexPrev', 'uTexCur', 'uPal', 'uTime', 'uWall', 'uHoles', 'uHoleCount'];
+/** A zone-change bake is spread over this many frames (row strips via scissor) to avoid a hitch. */
+const BAKE_STRIPS = 4;
+const STRIP_H = NEB_SIZE / BAKE_STRIPS;
 
 export function createBackground() {
   /** @type {import('./gl.js').Program | null} */
@@ -42,21 +45,55 @@ export function createBackground() {
   let bakeProg = null;
   /** @type {(WebGLTexture | null)[]} */
   const tex = [null, null];
+  /** Palette each texture holds (or is being baked with) and its next strip to bake. */
+  const texPal = new Int32Array([0, 0]);
+  const texRow = new Int32Array([BAKE_STRIPS, BAKE_STRIPS]);
   /** @type {WebGLFramebuffer | null} */
   let bakeFb = null;
   let cur = 0;             // index into tex of the current zone's nebula
   let curPal = 0;
   let prevPal = 0;
   let fade = 1;
-  let pendingBake = true;  // bake curPal into tex[cur] before the next draw
+  let bakeAll = true;      // finish every pending bake in one go (boot, restore, instant switch)
   const pal = new Float32Array(24);
   const bg = new Float32Array(3);
   let flashL = 0, flashR = 0;
 
+  /** @param {number} i texture index @param {number} palIdx */
+  function queue(i, palIdx) { texPal[i] = palIdx; texRow[i] = 0; }
+
+  /**
+   * Bake rows [row0, row1) strips of texture i.
+   * @param {import('./gl.js').Gfx} gfx @param {number} i @param {number} row0 @param {number} row1
+   */
+  function bakeRows(gfx, i, row0, row1) {
+    const gl = gfx.gl;
+    if (!bakeProg) return;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, bakeFb);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex[i], 0);
+    gl.viewport(0, 0, NEB_SIZE, NEB_SIZE);
+    gl.enable(gl.SCISSOR_TEST);
+    gl.scissor(0, row0 * STRIP_H, NEB_SIZE, (row1 - row0) * STRIP_H);
+    gl.disable(gl.BLEND);
+    gl.useProgram(bakeProg.prog);
+    gl.uniform1ui(bakeProg.u.uSeed, (0x51a7 + texPal[i] * 7919) >>> 0);
+    gl.uniform1f(bakeProg.u.uSize, NEB_SIZE);
+    gl.bindVertexArray(gfx.emptyVao);
+    gfx.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.disable(gl.SCISSOR_TEST);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    texRow[i] = row1;
+    if (row1 >= BAKE_STRIPS) {
+      gl.bindTexture(gl.TEXTURE_2D, tex[i]);
+      gl.generateMipmap(gl.TEXTURE_2D);
+    }
+  }
+
   const self = {
     /** Linear background colour of the current zone (for clears). */
     bg,
-    /** (Re)create every GL resource. @param {import('./gl.js').Gfx} gfx */
+    /** (Re)create every GL resource. After a context restore both textures are re-baked (current
+     * and previous palette), so a cross-fade in progress carries on. @param {import('./gl.js').Gfx} gfx */
     init(gfx) {
       const gl = gfx.gl;
       prog = createProgram(gl, FULLSCREEN_VS, BACKGROUND_FS, 'background', UNIFORMS);
@@ -72,51 +109,52 @@ export function createBackground() {
         tex[i] = t;
       }
       bakeFb = gl.createFramebuffer();
-      // After a context restore both textures are blank: rebake current, skip the fade.
-      fade = 1;
-      pendingBake = true;
+      queue(cur, curPal);
+      queue(1 - cur, prevPal);
+      bakeAll = true;
     },
 
     /** Switch to a zone's palette; cross-fades unless `instant`. @param {number} palIdx @param {boolean} instant */
     setPalette(palIdx, instant) {
-      if (palIdx === curPal && !pendingBake) return;
       if (palIdx !== curPal) {
         prevPal = curPal;
         curPal = palIdx;
         cur = 1 - cur;
+        queue(cur, curPal);
         fade = instant ? 1 : 0;
       }
-      pendingBake = true;
+      if (instant) {
+        fade = 1;
+        if (texPal[cur] !== curPal) queue(cur, curPal);
+        bakeAll = true;
+      }
     },
 
     get palette() { return curPal; },
     get fade() { return fade; },
     get prevPalette() { return prevPal; },
+    /** True while a nebula bake is still in progress. */
+    get baking() { return texRow[0] < BAKE_STRIPS || texRow[1] < BAKE_STRIPS; },
 
     /** @param {number} side -1 left, +1 right */
     flash(side) { if (side < 0) flashL = 1; else flashR = 1; },
     resetFx() { flashL = 0; flashR = 0; },
 
     /**
-     * Bake the pending nebula if any. Must run outside the scene pass (binds its own target).
+     * Advance pending nebula bakes: everything at once after boot / restore / an instant switch,
+     * otherwise one strip per frame (current texture first). Must run outside the scene pass.
      * @param {import('./gl.js').Gfx} gfx
      */
     bakeIfNeeded(gfx) {
-      if (!pendingBake || !bakeProg) return;
-      const gl = gfx.gl;
-      gl.bindFramebuffer(gl.FRAMEBUFFER, bakeFb);
-      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex[cur], 0);
-      gl.viewport(0, 0, NEB_SIZE, NEB_SIZE);
-      gl.disable(gl.BLEND);
-      gl.useProgram(bakeProg.prog);
-      gl.uniform1ui(bakeProg.u.uSeed, (0x51a7 + curPal * 7919) >>> 0);
-      gl.uniform1f(bakeProg.u.uSize, NEB_SIZE);
-      gl.bindVertexArray(gfx.emptyVao);
-      gfx.drawArrays(gl.TRIANGLES, 0, 3);
-      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-      gl.bindTexture(gl.TEXTURE_2D, tex[cur]);
-      gl.generateMipmap(gl.TEXTURE_2D);
-      pendingBake = false;
+      if (!bakeProg) return;
+      for (let k = 0; k < 2; k++) {
+        const i = k === 0 ? cur : 1 - cur;
+        if (texRow[i] >= BAKE_STRIPS) continue;
+        if (bakeAll) { bakeRows(gfx, i, texRow[i], BAKE_STRIPS); continue; }
+        bakeRows(gfx, i, texRow[i], texRow[i] + 1);
+        return;
+      }
+      bakeAll = false;
     },
 
     /**
@@ -126,12 +164,15 @@ export function createBackground() {
      * @param {number} w @param {number} h backing size
      * @param {number} time renderer clock
      * @param {number} dt real seconds
+     * @param {Float32Array} holes black holes for lensing (rel x, rel y, core r, influence r)
+     * @param {number} holeCount
      */
-    draw(gfx, cam, w, h, time, dt) {
+    draw(gfx, cam, w, h, time, dt, holes, holeCount) {
       if (!prog) return;
       const gl = gfx.gl;
       const u = prog.u;
-      if (fade < 1) fade = Math.min(1, fade + dt / CONFIG.ZONE_CROSSFADE_S);
+      // The fade starts once the new nebula is fully baked.
+      if (fade < 1 && texRow[cur] >= BAKE_STRIPS) fade = Math.min(1, fade + dt / CONFIG.ZONE_CROSSFADE_S);
       flashL *= Math.exp(-dt * 5);
       flashR *= Math.exp(-dt * 5);
       const vy = cam.y + cam.shakeY;
@@ -157,6 +198,8 @@ export function createBackground() {
       gl.uniform3fv(u.uPal, pal);
       gl.uniform1f(u.uTime, time % 3600);
       gl.uniform4f(u.uWall, flashL, flashR, wrap(vy, 1024), 0);
+      gl.uniform4fv(u.uHoles, holes);
+      gl.uniform1i(u.uHoleCount, holeCount);
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, tex[1 - cur]);
       gl.uniform1i(u.uTexPrev, 0);
@@ -164,7 +207,13 @@ export function createBackground() {
       gl.bindTexture(gl.TEXTURE_2D, tex[cur]);
       gl.uniform1i(u.uTexCur, 1);
       gl.activeTexture(gl.TEXTURE0);
-      gl.disable(gl.BLEND);
+      if (gfx.sceneScale !== 1) {
+        // Opaque pass, scaled into the 8-bit scene range.
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gfx.src, gl.ZERO);
+      } else {
+        gl.disable(gl.BLEND);
+      }
       gl.bindVertexArray(gfx.emptyVao);
       gfx.drawArrays(gl.TRIANGLES, 0, 3);
       bg[0] = PALETTE[curPal * 12]; bg[1] = PALETTE[curPal * 12 + 1]; bg[2] = PALETTE[curPal * 12 + 2];

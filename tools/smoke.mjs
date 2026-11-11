@@ -8,6 +8,7 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { startServer } from './serve.mjs';
+import { listShippedFiles, contentHash } from './build-precache.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const OUT = path.join(ROOT, 'artifacts');
@@ -60,6 +61,21 @@ function imageStats(buf) {
   return { mean: sum / n, max, brightFrac: bright / n, colours: buckets.size };
 }
 
+// The service worker precache and the build version must describe the files being shipped.
+{
+  const shipped = listShippedFiles(ROOT);
+  const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+  const want = `${pkg.version || '0.0.0'}+${contentHash(ROOT, shipped).slice(0, 8)}`;
+  const sw = fs.readFileSync(path.join(ROOT, 'sw.js'), 'utf8');
+  const swVer = (sw.match(/^const VERSION = "(.*)";$/m) || [])[1];
+  const swFiles = JSON.parse((sw.match(/^const FILES = (.*);$/m) || [])[1] || '[]');
+  const ver = (fs.readFileSync(path.join(ROOT, 'src', 'version.js'), 'utf8').match(/^export const VERSION = "(.*)";$/m) || [])[1];
+  const wantFiles = shipped.filter((f) => f !== 'sw.js');
+  const sameFiles = swFiles.length === wantFiles.length && swFiles.every((f, i) => f === wantFiles[i]);
+  check('sw.js + version.js match the shipped files (else run npm run precache)', swVer === want && ver === want && sameFiles,
+    `want ${want}, sw.js ${swVer}, version.js ${ver}, files ${sameFiles ? 'same' : 'differ'}`);
+}
+
 const { server, port } = await startServer({ port: 0 });
 const base = `http://127.0.0.1:${port}/`;
 const browser = await webkit.launch();
@@ -73,6 +89,26 @@ function watch(page, label) {
   page.on('pageerror', (e) => errors.push(`[${label}] pageerror: ${e.message}`));
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+/** In-page synthetic touch + pointer holds on the canvas, and a fake visibility change. */
+const TOUCH_HELPERS = `window.__t = {
+  ev(type, id) {
+    const c = document.getElementById('game');
+    let te;
+    try {
+      const t = new Touch({ identifier: id, target: c, clientX: 195, clientY: 600 });
+      const live = type === 'touchend' ? [] : [t];
+      te = new TouchEvent(type, { touches: live, targetTouches: live, changedTouches: [t], bubbles: true, cancelable: true });
+    } catch { te = new TouchEvent(type, { bubbles: true, cancelable: true }); }
+    c.dispatchEvent(te);
+  },
+  down(id = 1) { this.ev('touchstart', id); document.getElementById('game').dispatchEvent(new PointerEvent('pointerdown', { pointerId: id, pointerType: 'touch', clientX: 195, clientY: 600, bubbles: true, cancelable: true, isPrimary: true, buttons: 1 })); },
+  up(id = 1) { this.ev('touchend', id); document.getElementById('game').dispatchEvent(new PointerEvent('pointerup', { pointerId: id, pointerType: 'touch', clientX: 195, clientY: 600, bubbles: true, cancelable: true, isPrimary: true })); },
+  vis(state) {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => state });
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => state === 'hidden' });
+    document.dispatchEvent(new Event('visibilitychange'));
+  },
+};`;
 const shot = async (page, name) => { const b = await page.screenshot({ path: path.join(OUT, name) }); return b; };
 /** Screenshot with #boot, #screens, #hud and #debug hidden, so only the WebGL canvas is measured. */
 async function canvasOnly(page) {
@@ -97,6 +133,14 @@ try {
   check('title canvas not blank', ts.colours > 20 && ts.max > 60, `colours=${ts.colours} max=${ts.max.toFixed(0)}`);
   check('boot splash dismissed (main showed a screen)', await page.evaluate(() => document.getElementById('boot') === null));
   void titleShot;
+  // First run (fresh storage): one title instruction — the HUD prompt replaces the hint.
+  const fr = await page.evaluate(() => {
+    const p = document.querySelector('.hud-prompt');
+    return { hint: getComputedStyle(document.querySelector('.title-hint')).display, prompt: p.classList.contains('on') ? p.textContent : null };
+  });
+  check('first-run title shows one instruction', fr.hint === 'none' && fr.prompt === 'RELEASE to fling', JSON.stringify(fr));
+  const dailySub = await page.evaluate(() => document.querySelector('.chip .chip-sub').textContent);
+  check('Daily chip shows today\'s date', /\d/.test(dailySub), dailySub);
 
   if (!SKIP_GAMEPLAY) {
     // ------------------------------------------------------------ 2. autoplay run
@@ -165,6 +209,91 @@ try {
     const ms = Date.now() - t0;
     check('tap restarts in under 300ms', restarted && ms < 300 + 150, `${ms}ms incl. Playwright round-trip`);
     await tp.close();
+
+    // ------------------------------------------------------------ 4. pause / resume keeps the orbit
+    const pr = await context.newPage(); watch(pr, 'pause');
+    await pr.goto(`${base}?seed=7`);
+    await pr.waitForFunction(() => window.__slingstar && window.__slingstar.frames > 30, null, { timeout: 15000 });
+    await pr.evaluate(TOUCH_HELPERS);
+    // Release from home exactly when the aim line is clear, then press (armed) once outside the home
+    // ring, so the comet latches onto the next planet with the hold still down.
+    await pr.evaluate(() => new Promise((res) => { const f = () => { if (window.__slingstar.world.aim.clear) { window.__t.down(); window.__t.up(); res(); } else requestAnimationFrame(f); }; f(); }));
+    await pr.evaluate(() => new Promise((res) => {
+      const f = () => {
+        const w = window.__slingstar.world, b = w.bodies, c = w.comet;
+        let home = -1; for (let i = 0; i < b.count; i++) if (b.alive[i] && b.pathIndex[i] === 0) home = i;
+        if (c.state === 1 && (home < 0 || Math.hypot(c.x - b.x[home], c.y - b.y[home]) > b.rc[home] + 30)) res(); else requestAnimationFrame(f);
+      };
+      f();
+    }));
+    await pr.evaluate(() => window.__t.down());
+    let orbiting = false;
+    try { await pr.waitForFunction(() => window.__slingstar.world.started && window.__slingstar.world.comet.state === 0, null, { timeout: 8000 }); orbiting = true; } catch {}
+    check('touch run: armed hold latches onto the next planet', orbiting);
+    await sleep(250);
+    const bodyBefore = await pr.evaluate(() => window.__slingstar.world.comet.bodyId);
+    const pb = await pr.locator('.pause-btn').boundingBox();
+    await pr.touchscreen.tap(pb.x + pb.width / 2, pb.y + pb.height / 2);
+    await pr.waitForFunction(() => window.__slingstar.screen === 'paused', null, { timeout: 3000 }).catch(() => {});
+    await sleep(400);   // let the overlay's fade-in finish before reading / capturing it
+    const ver = await pr.evaluate(() => { const v = document.querySelector('.s-paused .version'); const r = v.getBoundingClientRect(); return { text: v.textContent, visible: r.height > 0 && getComputedStyle(v).visibility !== 'hidden' && Number(getComputedStyle(v).opacity) > 0.3 }; });
+    check('pause screen shows a non-empty build version', ver.visible && /\S/.test(ver.text) && ver.text.includes(await pr.evaluate(() => window.__slingstar.version)), JSON.stringify(ver));
+    await shot(pr, 'paused.png');
+    await pr.evaluate(() => window.__t.up());     // the holding finger lifts while paused
+    await sleep(600);
+    const rb = await pr.locator('.s-paused .btn.primary').boundingBox();
+    await pr.touchscreen.tap(rb.x + rb.width / 2, rb.y + rb.height / 2);
+    await sleep(700);
+    const kept = await pr.evaluate(() => ({ screen: window.__slingstar.screen, state: window.__slingstar.world.comet.state, body: window.__slingstar.world.comet.bodyId, dead: window.__slingstar.world.dead }));
+    check('Resume keeps the comet orbiting (no fling)', kept.screen === 'playing' && kept.state === 0 && kept.body === bodyBefore && !kept.dead, JSON.stringify({ ...kept, bodyBefore }));
+    // Background mid-orbit → "Tap to resume" → still orbiting.
+    await pr.evaluate(() => window.__t.vis('hidden'));
+    await sleep(200);
+    const hidScreen = await pr.evaluate(() => window.__slingstar.screen);
+    await pr.evaluate(() => window.__t.vis('visible'));
+    await sleep(200);
+    await pr.touchscreen.tap(195, 420);
+    await sleep(500);
+    const kept2 = await pr.evaluate(() => ({ screen: window.__slingstar.screen, state: window.__slingstar.world.comet.state, body: window.__slingstar.world.comet.bodyId }));
+    check('hide → Tap to resume keeps the comet orbiting', hidScreen === 'resume' && kept2.screen === 'playing' && kept2.state === 0 && kept2.body === bodyBefore, JSON.stringify({ hidScreen, ...kept2 }));
+    await pr.touchscreen.tap(195, 600);
+    await sleep(150);
+    const flung = await pr.evaluate(() => window.__slingstar.world.comet.state);
+    check('after resume, the next real tap flings', flung === 1, `state=${flung}`);
+    await pr.close();
+
+    // ------------------------------------------------------------ 5. late zones (hazards), sim at 4×
+    const zp = await context.newPage(); watch(zp, 'zone4');
+    await zp.goto(`${base}?seed=1&autoplay=1&fast=4`);
+    try {
+      await zp.waitForFunction(() => window.__slingstar.world && window.__slingstar.world.score.zone >= 4 && window.__slingstar.screen === 'playing', null, { timeout: 150000, polling: 50 });
+      await sleep(900);
+      const hz = await zp.evaluate(() => { const b = window.__slingstar.world.bodies; let moons = 0, holes = 0; for (let i = 0; i < b.count; i++) if (b.alive[i]) { if (b.type[i] === 1) moons++; else if (b.type[i] === 2) holes++; } return { moons, holes, zone: window.__slingstar.world.score.zone }; });
+      await shot(zp, 'zone4.png');
+      check('autoplay reaches zone 4', true, `zone=${hz.zone}`);
+      check('zone 4 field has hazards (moons / black holes)', hz.moons + hz.holes > 0, JSON.stringify(hz));
+      // Zone 4 introduces black holes: wait for one well inside the view (clear of the HUD and the
+      // screen edges) and capture it.
+      // Back to real time first: at fast=4 the (real-time) camera trails the comet.
+      await zp.evaluate(() => { window.__slingstar.fast = 1; });
+      await sleep(1500);
+      let holeSeen = false;
+      try {
+        await zp.waitForFunction(() => {
+          const w = window.__slingstar.world, b = w.bodies, cy = w.comet.y;
+          if (window.__slingstar.screen !== 'playing') return false;
+          for (let i = 0; i < b.count; i++) {
+            if (b.alive[i] && b.type[i] === 2 && b.y[i] > cy + 150 && b.y[i] < cy + 900 && b.x[i] > 150 && b.x[i] < 850) return true;
+          }
+          return false;
+        }, null, { timeout: 90000, polling: 30 });
+        holeSeen = true;
+      } catch {}
+      const hz2 = await zp.evaluate(() => ({ zone: window.__slingstar.world.score.zone, screen: window.__slingstar.screen }));
+      if (holeSeen) await shot(zp, 'zone4-blackhole.png');
+      check('zone 4+ shows a black hole in view (artifacts/zone4-blackhole.png)', holeSeen, JSON.stringify(hz2));
+    } catch { check('autoplay reaches zone 4', false, 'timed out after 150s at fast=4'); await shot(zp, 'zone4.png'); }
+    await zp.close();
   }
   await page.close();
 } catch (e) {

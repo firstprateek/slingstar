@@ -186,7 +186,10 @@ export const STORAGE = Object.freeze({
  * @property {number} y0
  * @property {number} dx             Unit direction (tangent, after aim assist).
  * @property {number} dy
- * @property {number} length         Drawn length: AIM_LINE_LENGTH, or shorter if it hits a body.
+ * @property {number} length         Drawn length: AIM_LINE_LENGTH, or shorter if the flight would hit a
+ *                                   body (moons, drifting and binary planets at their PREDICTED positions
+ *                                   when the comet gets there) or enter a black hole's influence radius
+ *                                   (the line never lights through one).
  * @property {number} target         Slot index of the planet whose ring the ray enters cleanly within
  *                                   CONFIG.AIM_TARGET_RANGE (not limited to the drawn length), else -1.
  * @property {boolean} clear         true when `target >= 0` — draw the line and that ring in the accent colour.

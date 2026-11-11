@@ -8,18 +8,19 @@ out vec4 outColor;
 uniform sampler2D uTex;
 uniform vec2 uTexel;     // source texel size
 uniform vec2 uThresh;    // threshold, soft knee
+uniform vec2 uIO;        // x: scene value scale in (1 / sceneScale), y: bloom store scale out
 void main() {
   vec3 c = texture(uTex, vUV + vec2(-uTexel.x, -uTexel.y)).rgb
          + texture(uTex, vUV + vec2(uTexel.x, -uTexel.y)).rgb
          + texture(uTex, vUV + vec2(-uTexel.x, uTexel.y)).rgb
          + texture(uTex, vUV + vec2(uTexel.x, uTexel.y)).rgb;
-  c *= 0.25;
+  c *= 0.25 * uIO.x;
   float br = max(c.r, max(c.g, c.b));
   float th = uThresh.x, kn = uThresh.y;
   float soft = clamp(br - th + kn, 0.0, 2.0 * kn);
   soft = soft * soft / (4.0 * kn + 1e-4);
   float w = max(soft, br - th) / max(br, 1e-4);
-  outColor = vec4(min(c * w, vec3(48.0)), 1.0);
+  outColor = vec4(min(c * w, vec3(48.0)) * uIO.y, 1.0);
 }
 `;
 
@@ -64,8 +65,8 @@ in vec2 vUV;
 out vec4 outColor;
 uniform sampler2D uScene;
 uniform sampler2D uBloom;
-uniform float uBloomK;
-uniform float uExposure;
+uniform float uBloomK;    // includes 1 / sceneScale
+uniform float uExposure;  // includes 1 / sceneScale
 uniform float uCA;        // chromatic aberration strength (0 = off)
 uniform float uDim;       // 0..1 game-over dim
 uniform float uFlash;     // full-screen white flash (death), 0..1
@@ -94,8 +95,7 @@ void main() {
   } else {
     col = texture(uScene, uv).rgb;
   }
-  col += texture(uBloom, uv).rgb * uBloomK;
-  col *= uExposure;
+  col = col * uExposure + texture(uBloom, uv).rgb * uBloomK;
   col += vec3(uFlash);
   col = tonemap(col);
   // Vignette and a darker band under the HUD at the top.
