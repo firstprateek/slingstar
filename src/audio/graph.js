@@ -11,11 +11,12 @@
  *
  * Noise buffers and the reverb impulse are generated once, when the graph is built (at unlock).
  */
+import { CONFIG } from '../config.js';
 
 /** Master output level. Everything is mixed to leave headroom below 0 dBFS. */
-export const MASTER_LEVEL = 0.8;
+export const MASTER_LEVEL = CONFIG.AUDIO_MASTER_LEVEL;
 /** The low-pass sits here when open (effectively transparent). */
-export const LOWPASS_OPEN_HZ = 18000;
+export const LOWPASS_OPEN_HZ = CONFIG.AUDIO_LOWPASS_OPEN_HZ;
 /** Length of the shared white-noise buffer, seconds. */
 const NOISE_SECONDS = 2;
 /** Reverb impulse length, seconds. Small room / short plate. */

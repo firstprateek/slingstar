@@ -179,13 +179,13 @@ void main() {
   for (int s = 0; s < 2; s++) {
     float d = s == 0 ? dl : dr;
     float flash = s == 0 ? uWall.x : uWall.y;
-    float dd = max(d, 0.0);
+    float dd = abs(d);   // glow falls off on both sides (the view can slide past a wall)
     float line = exp(-dd / max(2.2 * upx, 1.5));
     float glow = exp(-dd / 12.0) * 0.5 + exp(-dd / 55.0) * 0.08;
     wl += (line * 1.4 + glow * stream) * (1.0 + 3.5 * flash) + flash * exp(-dd / 220.0) * 0.6;
   }
+  if (dl < 0.0 || dr < 0.0) col *= 0.4;   // outside the field: dimmer space, wall line stays bright
   col += acc * wl * 1.2 + vec3(wl * 0.08);
-  if (dl < 0.0 || dr < 0.0) col *= 0.35;
 
   outColor = vec4(col, 1.0);
 }

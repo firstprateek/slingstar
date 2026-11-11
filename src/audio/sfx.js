@@ -10,8 +10,8 @@ import { CONFIG } from '../config.js';
 import { mtof, scaleNote, pluckEnv, swellEnv, onEnd, VoicePool } from './graph.js';
 import { zoneRoot } from './music.js';
 
-const MOTE_VOICES = 4;
-const SFX_VOICES = 14;
+const MOTE_VOICES = CONFIG.AUDIO_MOTE_VOICES;
+const SFX_VOICES = CONFIG.AUDIO_SFX_VOICES;
 const SCALE = CONFIG.SCALE;
 
 /**

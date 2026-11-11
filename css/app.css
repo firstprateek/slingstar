@@ -62,11 +62,23 @@ button { font: inherit; color: inherit; -webkit-tap-highlight-color: transparent
   animation: boot-pulse 1s ease-in-out infinite alternate;
 }
 @keyframes boot-pulse { from { opacity: 0.3; } to { opacity: 1; } }
+/* Renderer failed (no WebGL2 / shader error): a readable message instead of a black screen. */
+.fatal {
+  position: fixed; inset: 0; z-index: 20; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  padding: 0 32px; box-sizing: border-box; text-align: center; background: var(--bg); color: var(--ink);
+}
+.fatal-title { font-weight: 900; font-size: 26px; letter-spacing: 0.3em; padding-left: 0.3em; margin-bottom: 18px;
+  text-shadow: 0 0 10px rgba(var(--accent-rgb), 0.9); }
+.fatal p { margin: 0 0 10px; font-size: 16px; line-height: 1.45; }
+.fatal .fatal-sub { color: var(--muted); font-size: 14px; }
 .noscript { position: fixed; inset: 40% 0 auto; text-align: center; color: var(--muted); }
 
 /* ============================================================== HUD */
 #hud { transition: opacity 0.2s; }
 #hud.off { opacity: 0; }
+/* On the title only the first-run prompt shows (the live game is behind the title screen). */
+#hud.title-mode .hud-top, #hud.title-mode .hud-zone, #hud.title-mode .hud-perfect { display: none; }
+#hud.title-mode .hud-prompt { bottom: calc(var(--sab) + 7vh + 44px); }
 
 .hud-top {
   position: absolute; top: calc(var(--sat) + 8px); left: var(--sal); right: var(--sar); height: 54px;

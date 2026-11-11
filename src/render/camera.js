@@ -25,6 +25,7 @@ import { COMET } from '../contracts.js';
  * @property {number} shakeY
  * @property {number} sceneZoom  Scene multiplier (title zooms in slightly).
  * @property {boolean} snapped   False until the first update (or after reset): snap instead of spring.
+ * @property {boolean} followX   False until the first horizontal update (or after reset).
  * @property {number} cometX     Interpolated comet position this frame.
  * @property {number} cometY
  * @property {number} cometVx    Comet velocity this frame.
@@ -37,13 +38,13 @@ export function createCamera() {
   return {
     x: CONFIG.FIELD_WIDTH / 2, y: 0, vy: 0, zoom: 1, viewW: CONFIG.FIELD_WIDTH, viewH: 2160,
     sx: 0.002, sy: 0.001, lookX: 0, lookY: 0, shake: 0, shakeX: 0, shakeY: 0, sceneZoom: 1,
-    snapped: false, cometX: 0, cometY: 0, cometVx: 0, cometVy: 0, speed: 0,
+    snapped: false, followX: false, cometX: 0, cometY: 0, cometVx: 0, cometVy: 0, speed: 0,
   };
 }
 
 /** @param {Camera} cam */
 export function resetCamera(cam) {
-  cam.snapped = false;
+  cam.snapped = false; cam.followX = false;
   cam.shake = 0; cam.shakeX = 0; cam.shakeY = 0;
   cam.vy = 0; cam.lookX = 0; cam.lookY = 0;
 }
@@ -105,7 +106,14 @@ export function updateCamera(cam, world, alpha, dt, aspect, time, reducedMotion)
       rem -= h;
     }
   }
-  cam.x = CONFIG.FIELD_WIDTH / 2;
+  // Horizontal: the field stays centred, except that orbits around planets near a wall reach past
+  // it; then the view slides just enough to keep the comet CAMERA_EDGE_PAD inside the screen.
+  const half = cam.viewW * 0.5, pad = CONFIG.CAMERA_EDGE_PAD;
+  let tx = CONFIG.FIELD_WIDTH / 2;
+  const txMin = cam.cometX - half + pad, txMax = cam.cometX + half - pad;
+  if (tx < txMin) tx = txMin; else if (tx > txMax) tx = txMax;
+  if (!cam.followX) { cam.x = tx; cam.followX = true; }
+  else cam.x += (tx - cam.x) * (1 - Math.exp(-dt * CONFIG.CAMERA_SPRING));
 
   // Shake: decaying amplitude × smooth pseudo-noise.
   cam.shake *= Math.exp(-dt * 7);

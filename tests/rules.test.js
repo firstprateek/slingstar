@@ -208,7 +208,7 @@ test('wall bounce: vx flips, speed -10% (never below base), combo resets', () =>
   assert.equal(w.dead, false);
 
   const w2 = emptyWorld();
-  setFree(w2, 970, 3000, 820, 0);
+  setFree(w2, 970, 3000, CONFIG.BASE_SPEED_START * 1.025, 0); // −10% would fall below base speed
   const ev2 = driver(w2).run(false, 10);
   const b2 = ofType(ev2, EV.BOUNCE);
   assert.equal(b2.length, 1);

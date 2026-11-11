@@ -135,7 +135,7 @@ export function createBackground() {
       flashL *= Math.exp(-dt * 5);
       flashR *= Math.exp(-dt * 5);
       const vy = cam.y + cam.shakeY;
-      const vx = cam.shakeX;
+      const vx = cam.x - CONFIG.FIELD_WIDTH / 2 + cam.shakeX;   // parallax offset from the field centre
       for (let i = 0; i < 12; i++) {
         pal[i] = PALETTE[prevPal * 12 + i];
         pal[12 + i] = PALETTE[curPal * 12 + i];
@@ -145,7 +145,7 @@ export function createBackground() {
       gl.uniform2f(u.uView, cam.viewW, cam.viewH);
       gl.uniform2f(u.uBase, CONFIG.FIELD_WIDTH, CONFIG.FIELD_WIDTH * (h / w));
       gl.uniform1f(u.uZoom, cam.zoom);
-      gl.uniform1f(u.uCamX, cam.x + vx);
+      gl.uniform1f(u.uCamX, cam.x + cam.shakeX);
       gl.uniform2f(u.uStar0, vx * STAR_PARALLAX[0] + 11, wrap(vy * STAR_PARALLAX[0], STAR_CELL[0] * 1024));
       gl.uniform2f(u.uStar1, vx * STAR_PARALLAX[1] + 37, wrap(vy * STAR_PARALLAX[1], STAR_CELL[1] * 1024));
       gl.uniform2f(u.uStar2, vx * STAR_PARALLAX[2] + 73, wrap(vy * STAR_PARALLAX[2], STAR_CELL[2] * 1024));

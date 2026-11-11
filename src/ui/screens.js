@@ -12,10 +12,10 @@
  * time a screen other than BOOT is shown.
  */
 import { MODE, SCREEN } from '../contracts.js';
-import { ZONES as ZONE_DEFS } from '../config.js';
+import { CONFIG, ZONES as ZONE_DEFS } from '../config.js';
 
 /** Ignore game-over taps for this long after it appears, so a finger still down from play can't skip it. */
-const GAMEOVER_TAP_GUARD_MS = 380;
+const GAMEOVER_TAP_GUARD_MS = CONFIG.GAMEOVER_TAP_GUARD_MS;
 
 const SVG = Object.freeze({
   pause: '<svg viewBox="0 0 14 14" aria-hidden="true"><rect x="2" y="1" width="3.6" height="12" rx="1.3" fill="#fff"/><rect x="8.4" y="1" width="3.6" height="12" rx="1.3" fill="#fff"/></svg>',

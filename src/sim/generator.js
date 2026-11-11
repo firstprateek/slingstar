@@ -25,39 +25,39 @@ import { zoneOfPathIndex, captureBand, solveWindowDeg, pathSpacingMax } from './
 /** @typedef {import('../contracts.js').WorldT} WorldT */
 
 // ---------------------------------------------------------------- module-local tuning
-// TODO(config): these generator-internal constants could move to config.js.
+// Tuning values are aliases of config.js; the rest are generator-internal mechanics.
 /** A solving ray must reach this far inside B's ring (not just graze its edge). */
-const SOLVE_RING_MARGIN = 15;
+const SOLVE_RING_MARGIN = CONFIG.SOLVE_RING_MARGIN;
 /**
  * Besides the mid-band orbit the rule names, the window is also required on the outer orbit
  * (this far inside A's ring edge), because armed holds — and the bot — latch at the ring edge.
  */
-const SOLVE_OUTER_INSET = 8;
+const SOLVE_OUTER_INSET = CONFIG.SOLVE_OUTER_INSET;
 /** Half-width of the x range for B relative to A, as a fraction of the spacing (keeps dy >= 0.53 s). */
-const PATH_DX_FRACTION = 0.85;
+const PATH_DX_FRACTION = CONFIG.PATH_DX_FRACTION;
 /** Minimum gap between a body's surface and any other planet's capture ring. */
-const BODY_GAP = 40;
+const BODY_GAP = CONFIG.BODY_GAP;
 /** Chance of a non-path side planet beside each path segment. */
-const SIDE_PLANET_CHANCE = 0.3;
-const SIDE_R_MIN = 45;
-const SIDE_R_MAX = 85;
+const SIDE_PLANET_CHANCE = CONFIG.SIDE_PLANET_CHANCE;
+const SIDE_R_MIN = CONFIG.SIDE_R_MIN;
+const SIDE_R_MAX = CONFIG.SIDE_R_MAX;
 const SIDE_TRIES = 4;
 /** Chance of a stardust line along each path segment. */
-const MOTE_LINE_CHANCE = 0.85;
+const MOTE_LINE_CHANCE = CONFIG.MOTE_LINE_CHANCE;
 /** First mote sits this far along the release ray. */
-const MOTE_START = 40;
+const MOTE_START = CONFIG.MOTE_START;
 /** Motes are kept this far inside the walls. */
 const MOTE_WALL_INSET = 20;
 /** Bodies whose ring top is this far below the front are recycled. */
-const RECYCLE_BELOW = 300;
+const RECYCLE_BELOW = CONFIG.RECYCLE_BELOW;
 /** Consecutive path pairs re-validated whenever a body is placed. */
 const RECHECK_PAIRS = 3;
 /** Ring buffer of recent path slots (must exceed RECHECK_PAIRS + 1). */
 const RECENT = 16;
 /** Fallback: B is placed this far from A, this fraction of the way toward the field centre. */
-const FALLBACK_SPACING = 600;
+const FALLBACK_SPACING = CONFIG.FALLBACK_SPACING;
 const FALLBACK_TOWARD_CENTER = 0.6;
-const FALLBACK_R = 70;
+const FALLBACK_R = CONFIG.FALLBACK_R;
 /** Placements per update() call (spreads work; reset fills the whole lookahead at once). */
 const PLACEMENTS_PER_UPDATE = 2;
 

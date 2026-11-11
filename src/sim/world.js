@@ -18,17 +18,17 @@ import { comboUp, comboBreak, reachPath, updateHeight } from './scoring.js';
 /** @typedef {import('./generator.js').Generator} Generator */
 
 // ---------------------------------------------------------------- module-local tuning
-// TODO(config): candidates for config.js.
+// Aliases of config.js values (every gameplay number lives in config.js).
 /** The aim ray can light a target ring up to this far away (the drawn line stays AIM_LINE_LENGTH). */
-const AIM_TARGET_RANGE = 2400;
-/** Aim assist only considers rings whose centre is within this distance. */
-const AIM_ASSIST_RANGE = 2400;
+const AIM_TARGET_RANGE = CONFIG.AIM_TARGET_RANGE;
+/** Aim assist only considers rings whose centre is within this distance. @type {number} */
+const AIM_ASSIST_RANGE = CONFIG.AIM_TARGET_RANGE;
 /** The aim only counts a ring as a clean target if the ray gets this far inside it. */
-const AIM_RING_MARGIN = 12;
+const AIM_RING_MARGIN = CONFIG.AIM_RING_MARGIN;
 /** Swept armed latches place the comet this far inside the ring edge. */
-const LATCH_EPSILON = 0.5;
+const LATCH_EPSILON = CONFIG.LATCH_EPSILON;
 /** A near-miss pass ends when the comet is this much farther than NEAR_MISS_DISTANCE away. */
-const NEAR_MISS_HYSTERESIS = 40;
+const NEAR_MISS_HYSTERESIS = CONFIG.NEAR_MISS_HYSTERESIS;
 
 // ---------------------------------------------------------------- scratch (allocated once)
 /** AIM[0..1] = aim direction (after assist), AIM[2] = drawn length. */

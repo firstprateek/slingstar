@@ -21,12 +21,14 @@ export const CONFIG = Object.freeze({
   MAX_FRAME_DT: 0.1,
 
   // ---------------------------------------------------------------- speed
-  BASE_SPEED_START: 800,
+  /** Tuned 800 → 700 (Phase 2): a human-timed late press (~0.2 s) must still land inside the band. */
+  BASE_SPEED_START: 700,
   BASE_SPEED_CAP: 1600,
   /** Base speed added per zone after zone 1, until the cap. */
   BASE_SPEED_PER_ZONE: 140,
-  /** Current speed cap = base speed × this. Orbiting speed growth stops here. */
-  SPEED_CAP_FACTOR: 1.45,
+  /** Current speed cap = base speed × this. Orbiting speed growth stops here. Tuned 1.45 → 1.3
+   * (Phase 2): at 1.45 the comet hit the cap within a handful of zone 1 catches. */
+  SPEED_CAP_FACTOR: 1.3,
   /** Fractional speed gain per second while orbiting (6%). */
   ORBIT_SPEED_GAIN: 0.06,
 
@@ -67,8 +69,9 @@ export const CONFIG = Object.freeze({
   // ---------------------------------------------------------------- bodies
   PLANET_R_MIN: 60,
   PLANET_R_MAX: 130,
-  /** Capture band width (Rc - R) in zone 1 … and at/after zone 6. Linear in between. */
-  CAPTURE_BAND_Z1: 170,
+  /** Capture band width (Rc - R) in zone 1 … and at/after zone 6. Linear in between.
+   * Zone 1 tuned 170 → 200 (Phase 2) so a new player's first catches are forgiving. */
+  CAPTURE_BAND_Z1: 200,
   CAPTURE_BAND_Z6: 110,
   PATH_SPACING_MIN: 520,
   PATH_SPACING_MAX_Z1: 900,
@@ -156,9 +159,13 @@ export const CONFIG = Object.freeze({
   CAMERA_LOOKAHEAD_S: 0.22,
   CAMERA_SPRING: 7,
   CAMERA_MAX_ZOOM_OUT: 0.15,
+  /** Orbits near a wall reach past it: the view slides sideways to keep the comet this far inside the screen. */
+  CAMERA_EDGE_PAD: 90,
   NEAR_MISS_DISTANCE: 25,
   NEAR_MISS_TIMESCALE: 0.35,
   NEAR_MISS_DURATION: 0.25,
+  /** After NEAR_MISS_DURATION of real time at NEAR_MISS_TIMESCALE, ease back to 1× over this long (real s). */
+  NEAR_MISS_EASE_S: 0.2,
   /** A near-miss pass re-arms once the comet is NEAR_MISS_DISTANCE + this from the surface. */
   NEAR_MISS_HYSTERESIS: 40,
   DEATH_TIMESCALE: 0.15,
@@ -168,6 +175,8 @@ export const CONFIG = Object.freeze({
   REDUCED_MOTION_SLOWMO: 0.5,
   CATCH_SHAKE: 6,
   RESTART_MAX_MS: 300,
+  /** ?autoplay=1: the bot restarts this long (real s) after the game-over card appears. */
+  AUTOPLAY_RESTART_S: 1.6,
   /** Ignore taps on the game-over card for this long so a death-time hold doesn't skip it. */
   GAMEOVER_TAP_GUARD_MS: 380,
   /** Comet colours per tier ×1..×5 (linear-ish RGB 0..1, may exceed 1 for HDR). */

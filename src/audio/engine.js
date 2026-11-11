@@ -21,9 +21,9 @@ import { createMusic } from './music.js';
 import { createSfx } from './sfx.js';
 
 /** Death: music low-pass closes to CONFIG.DEATH_LOWPASS_HZ over this long. */
-const DEATH_FILTER_S = 0.3;
+const DEATH_FILTER_S = CONFIG.DEATH_LOWPASS_S;
 /** Music bus level while the death low-pass is closed (the bass still thumps through it). */
-const DEATH_MUSIC_DUCK = 0.6;
+const DEATH_MUSIC_DUCK = CONFIG.DEATH_MUSIC_DUCK;
 /** Small offset so sounds triggered "now" are not scheduled in the past. */
 const LEAD_IN = 0.005;
 
