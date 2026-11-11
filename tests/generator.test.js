@@ -8,7 +8,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createWorld } from '../src/sim/world.js';
-import { createGenerator, releaseWindowDeg, releaseWaitSeconds } from '../src/sim/generator.js';
+import { createGenerator, releaseWindowDeg, releaseWindowSeconds, releaseWaitSeconds } from '../src/sim/generator.js';
 import { solveWindowDeg, zoneOfPathIndex, captureBand } from '../src/sim/scoring.js';
 import { CONFIG } from '../src/config.js';
 import { BODY, BODY_FLAG } from '../src/contracts.js';
@@ -157,4 +157,66 @@ test('in a live world bodies and motes are recycled below the front and the pool
   assert.ok(maxBodies >= 8, `expected a populated field, max live ${maxBodies}`);
   assert.ok(maxMotes > 0, 'stardust lines are generated');
   assert.ok(maxMotes <= CONFIG.MAX_MOTES);
+});
+
+test('binary pairs keep appearing: zone 5 near its rate, zones 6–12 at the ramped rate, every rule held', (t) => {
+  // Rates are shares of path planets (config.js HAZARD_BINARY_*; generator.js rollMover makes up for
+  // the planets after a mover, which cannot move): targets 45% in zone 5, then 23% in zone 6 rising
+  // 3 points a zone (41% in zone 12). Before the binary fix, the time rule rejected them: 28% in
+  // zone 5, 7% in zone 6 and none from zone 7 on (one seed in 30 had none at all).
+  // Stated minimums (across these seeds): zone 5 >= 38%; zones 6–12 together >= 26%; each of zones
+  // 6–12 >= 18%; every seed has >= 2 pairs in zone 5 and >= 10 in zones 6–12.
+  const SEEDS_B = 24, PATH_B = 120; // zones 1–12
+  const tot = {}, bins = {};
+  let pairs = 0, binPairs = 0, longest = 0, fallbacks = 0, tightest = Infinity;
+  for (let seed = 1; seed <= SEEDS_B; seed++) {
+    const w = createWorld({ seed, generate: false });
+    const gen = createGenerator(w);
+    gen.reset(seed);
+    const perZone = {};
+    let checked = 1, y = 0;
+    while (checked <= PATH_B) {
+      w.comet.y = y; w.front.y = y - CONFIG.FRONT_MAX_LAG;
+      gen.update(4);
+      while (checked <= PATH_B && gen.pathCount > checked + LOOKAHEAD) {
+        const a = gen.slotOfPath(checked - 1), b = gen.slotOfPath(checked), bd = w.bodies, z = zoneOfPathIndex(checked);
+        assert.ok(a >= 0 && b >= 0);
+        tot[z] = (tot[z] ?? 0) + 1;
+        if (bd.flags[b] & BODY_FLAG.BINARY) { bins[z] = (bins[z] ?? 0) + 1; perZone[z] = (perZone[z] ?? 0) + 1; }
+        // Late-zone pairs with a binary end (generator.test's solvability run stops at zone 6): the
+        // degree rule, the time rule and the partner-eclipse bound.
+        if (z >= 6 && ((bd.flags[a] | bd.flags[b]) & BODY_FLAG.BINARY)) {
+          const deg = releaseWindowDeg(w, a, b), sec = releaseWindowSeconds(w, a, b);
+          assert.ok(deg >= solveWindowDeg(z), `seed ${seed} pair ${checked - 1}→${checked}: ${deg}°`);
+          assert.ok(sec >= CONFIG.SOLVE_WINDOW_MIN_S - 1e-9, `seed ${seed} pair ${checked - 1}→${checked}: ${(sec * 1000).toFixed(1)} ms`);
+          tightest = Math.min(tightest, sec);
+          if (bd.flags[a] & BODY_FLAG.BINARY) {
+            const wait = releaseWaitSeconds(w, a, b);
+            assert.ok(wait <= CONFIG.BINARY_MAX_WAIT_S + 1e-9, `seed ${seed} pair ${checked - 1}→${checked}: partner eclipse ${wait.toFixed(2)} s`);
+            longest = Math.max(longest, wait);
+          }
+          binPairs++;
+        }
+        pairs++;
+        checked++;
+      }
+      y += 250;
+    }
+    fallbacks += gen.fallbacks;
+    let late = 0;
+    for (let z = 6; z <= 12; z++) late += perZone[z] ?? 0;
+    assert.ok((perZone[5] ?? 0) >= 2, `seed ${seed}: only ${perZone[5] ?? 0} binary pairs in zone 5`);
+    assert.ok(late >= 10, `seed ${seed}: only ${late} binary pairs in zones 6–12`);
+  }
+  const share = (z) => (bins[z] ?? 0) / tot[z];
+  let lb = 0, lt = 0;
+  for (let z = 6; z <= 12; z++) { lb += bins[z] ?? 0; lt += tot[z]; }
+  const rates = Object.keys(tot).filter((z) => z >= 5).map((z) => `z${z} ${(100 * share(z)).toFixed(1)}%`).join(', ');
+  t.diagnostic(`binary share of path planets: ${rates}; zones 6–12 ${(100 * lb / lt).toFixed(1)}%; ${binPairs} late pairs with a binary checked ` +
+    `(tightest ${(tightest * 1000).toFixed(1)} ms, longest partner eclipse ${longest.toFixed(2)} s); fallbacks ${fallbacks} in ${pairs} placements`);
+  assert.ok(share(5) >= 0.38, `zone 5: ${(100 * share(5)).toFixed(1)}% binary`);
+  assert.ok(lb / lt >= 0.26, `zones 6–12: ${(100 * lb / lt).toFixed(1)}% binary`);
+  for (let z = 6; z <= 12; z++) assert.ok(share(z) >= 0.18, `zone ${z}: ${(100 * share(z)).toFixed(1)}% binary`);
+  assert.ok(binPairs >= SEEDS_B * 30, `only ${binPairs} late pairs with a binary`);
+  assert.ok(fallbacks <= pairs / 500, `${fallbacks} fallbacks in ${pairs} placements`);
 });

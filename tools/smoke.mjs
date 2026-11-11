@@ -344,6 +344,54 @@ try {
       check('zone 4+ shows a black hole in view (artifacts/zone4-blackhole.png)', holeSeen, JSON.stringify(hz2));
     } catch { check('autoplay reaches zone 4', false, 'timed out after 150s at fast=4'); await shot(zp, 'zone4.png'); }
     await zp.close();
+
+    // ------------------------------------------------------------ 6. zone 5+ binary pair, sim at 4×
+    // Seed 1 verified with the sim bot (tests/helpers.js botRun): zone 5 at ~35 s of sim time with a
+    // binary pair in view at once (zone 5 makes ~45% of path planets binary pairs).
+    const bp = await context.newPage(); watch(bp, 'zone5');
+    await bp.goto(`${base}?seed=1&autoplay=1&fast=4`);
+    try {
+      await bp.waitForFunction(() => window.__slingstar.world && window.__slingstar.world.score.zone >= 5 && window.__slingstar.screen === 'playing', null, { timeout: 150000, polling: 50 });
+      check('autoplay reaches zone 5', true, `zone=${await bp.evaluate(() => window.__slingstar.world.score.zone)}`);
+      await bp.evaluate(() => { window.__slingstar.fast = 1; });
+      await sleep(3000); // real time again; let the zone banner clear before the capture
+      // A live pair: two BINARY-flagged planets whose `parent` points at each other, both well inside
+      // the view (above the comet, clear of the HUD and the walls).
+      let pair = null;
+      try {
+        await bp.waitForFunction(() => {
+          const w = window.__slingstar.world, b = w.bodies, cy = w.comet.y;
+          if (window.__slingstar.screen !== 'playing') return false;
+          for (let i = 0; i < b.count; i++) {
+            if (!b.alive[i] || b.type[i] !== 0 || !(b.flags[i] & 4)) continue;
+            const p = b.parent[i];
+            if (p < 0 || p === i || !b.alive[p] || b.type[p] !== 0 || !(b.flags[p] & 4) || b.parent[p] !== i) continue;
+            const inView = (k) => b.y[k] > cy + 150 && b.y[k] < cy + 1100 && b.x[k] > 100 && b.x[k] < 900;
+            if (inView(i) && inView(p)) return true;
+          }
+          return false;
+        }, null, { timeout: 60000, polling: 30 });
+        await shot(bp, 'zone5-binary.png');
+        pair = await bp.evaluate(() => {
+          const w = window.__slingstar.world, b = w.bodies;
+          let pairs = 0, sample = null;
+          for (let i = 0; i < b.count; i++) {
+            if (!b.alive[i] || b.type[i] !== 0 || !(b.flags[i] & 4)) continue;
+            const p = b.parent[i];
+            if (p > i && b.alive[p] && b.type[p] === 0 && (b.flags[p] & 4) && b.parent[p] === i) {
+              pairs++;
+              sample ??= { a: i, b: p, path: b.pathIndex[i], samePath: b.pathIndex[i] === b.pathIndex[p], sep: Math.round(Math.hypot(b.x[i] - b.x[p], b.y[i] - b.y[p])) };
+            }
+          }
+          return { pairs, sample, zone: w.score.zone, screen: window.__slingstar.screen };
+        });
+      } catch {}
+      const ps2 = pair ? imageStats(await canvasOnly(bp)) : null;
+      check('zone 5+ has a live binary pair in view (artifacts/zone5-binary.png)',
+        !!pair && pair.pairs > 0 && pair.sample.samePath && ps2.colours > 30 && ps2.max > 120,
+        JSON.stringify({ ...pair, canvas: ps2 && { colours: ps2.colours, max: Math.round(ps2.max) } }));
+    } catch { check('autoplay reaches zone 5', false, 'timed out after 150s at fast=4'); await shot(bp, 'zone5-binary.png'); }
+    await bp.close();
   }
   await page.close();
 } catch (e) {

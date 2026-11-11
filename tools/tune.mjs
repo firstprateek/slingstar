@@ -44,7 +44,8 @@ function byZone(t) {
 
 // ---------------------------------------------------------------- generator: binary pairs
 {
-  const PATH = 60, pairsByZone = {};
+  // Zones 1–12. Binary rates are shares of path planets (config.js HAZARD_BINARY_*).
+  const PATH = 120, pairsByZone = {}, pathByZone = {};
   let fallbacks = 0, rerolls = 0, fromBinary = 0, longest = 0, waitSum = 0, eclipsed = 0;
   for (let seed = 1; seed <= N; seed++) {
     const w = createWorld({ seed, generate: false });
@@ -56,6 +57,7 @@ function byZone(t) {
       gen.update(4);
       while (checked <= PATH && gen.pathCount > checked + 4) {
         const a = gen.slotOfPath(checked - 1), b = gen.slotOfPath(checked), bd = w.bodies;
+        pathByZone[bd.zone[b]] = (pathByZone[bd.zone[b]] ?? 0) + 1;
         if (bd.flags[b] & BODY_FLAG.BINARY) pairsByZone[bd.zone[b]] = (pairsByZone[bd.zone[b]] ?? 0) + 1;
         if (bd.flags[a] & BODY_FLAG.BINARY) {
           const s = releaseWaitSeconds(w, a, b);
@@ -67,7 +69,8 @@ function byZone(t) {
     }
     fallbacks += gen.fallbacks; rerolls += gen.rerolls;
   }
-  console.log(`generator (${N} seeds × ${PATH} path planets): binary pairs by zone ${JSON.stringify(pairsByZone)}; fallbacks ${fallbacks}, re-rolls ${rerolls}; ` +
+  const share = Object.keys(pairsByZone).sort((a, b) => a - b).map((z) => `z${z} ${pairsByZone[z]} (${pct(pairsByZone[z], pathByZone[z])})`).join(', ');
+  console.log(`generator (${N} seeds × ${PATH} path planets): binary pairs by zone ${share}; fallbacks ${fallbacks}, re-rolls ${rerolls}; ` +
     `pairs leaving a binary ${fromBinary}: with a partner eclipse ${eclipsed}, mean ${(waitSum / Math.max(1, fromBinary)).toFixed(2)} s, longest ${longest.toFixed(2)} s (max ${CONFIG.BINARY_MAX_WAIT_S} s)`);
 }
 

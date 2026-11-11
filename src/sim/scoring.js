@@ -69,6 +69,15 @@ export function solveWindowReqDeg(zone, rho) {
   return t > deg ? t : deg;
 }
 
+/**
+ * Turn rate (rad/s, unsigned) of a binary pair generated in a zone: BINARY_ANGULAR_SPEED through
+ * zone 6, then BINARY_SPIN_RAMP more per zone up to BINARY_ANGULAR_SPEED_MAX. @param {number} zone
+ */
+export function binaryAngularSpeed(zone) {
+  const w = CONFIG.BINARY_ANGULAR_SPEED + (zone > 6 ? CONFIG.BINARY_SPIN_RAMP * (zone - 6) : 0);
+  return w > CONFIG.BINARY_ANGULAR_SPEED_MAX ? CONFIG.BINARY_ANGULAR_SPEED_MAX : w;
+}
+
 /** Max centre-to-centre path spacing for a zone. @param {number} zone */
 export function pathSpacingMax(zone) {
   let t = (zone - 1) / (CONFIG.PATH_SPACING_LATE_ZONE - 1);

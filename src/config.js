@@ -107,8 +107,17 @@ export const CONFIG = Object.freeze({
   BINARY_SEPARATION_MAX: 520,
   /** rad/s. Phase 4: 0.35 → 1.2 with real pairs. From one member, the partner swings through the
    * line to the next planet once a turn and hides it (a partner eclipse) for ~40–70° of the turn:
-   * at 0.35 rad/s a 2–3.5 s dark spell, at 1.2 about a second. */
+   * at 0.35 rad/s a 2–3.5 s dark spell, at 1.2 about a second. Pairs whose next planet is in zone
+   * 5 or 6; later ones turn faster (BINARY_SPIN_RAMP). */
   BINARY_ANGULAR_SPEED: 1.2,
+  /** After zone 6 the spin ramps by this per zone (rad/s), up to BINARY_ANGULAR_SPEED_MAX (zone 7
+   * 1.35, zone 8+ 1.5; scoring.binaryAngularSpeed, by the zone of the pair's next planet). The time
+   * rule's speed keeps rising to zone 8, so from a member the next planet's window narrows at the
+   * edges of a partner eclipse: there the eclipse spans ~75-85° of the turn, more than
+   * BINARY_MAX_WAIT_S allows at 1.2 rad/s (72°), and from zone 7 on every pair was rejected. A
+   * faster turn keeps the same eclipse under BINARY_MAX_WAIT_S. */
+  BINARY_SPIN_RAMP: 0.15,
+  BINARY_ANGULAR_SPEED_MAX: 1.5,
   /** Longest partner eclipse the generator allows from a binary member, s (generator.js
    * eclipseMaxRun; with 36 sampled phases at 1.2 rad/s: at most 6 blocked phases, under 70° ≈ 1.02 s). */
   BINARY_MAX_WAIT_S: 1.05,
@@ -126,7 +135,9 @@ export const CONFIG = Object.freeze({
   /** Chance a path segment gets a black hole beside it, in zone 4 and later. */
   HAZARD_BLACKHOLE_INTRO: 0.6,
   HAZARD_BLACKHOLE_LATER: 0.3,
-  /** Chance a path planet is a binary pair, in zone 5 and later. */
+  /** Chance a path planet is a binary pair, in zone 5 and later: a share of ALL path planets (the
+   * generator raises its roll to make up for the planets right after a mover, which cannot move;
+   * generator.js rollMover). Targets: 45% in zone 5, 23% in zone 6 rising 3 points a zone. */
   HAZARD_BINARY_INTRO: 0.45,
   HAZARD_BINARY_LATER: 0.2,
   /** Zone 6+: every later-zone rate rises by this per zone, up to HAZARD_RATE_MAX. */

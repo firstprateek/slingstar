@@ -22,6 +22,16 @@
  * Two moving path planets (drifting / binary) never follow each other, so every pair has at most
  * one moving end.
  *
+ * Binary placement (binary fix): under the time rule (fast orbits late in a run) a pair is only
+ * placeable if its geometry is shaped for it, so a binary try is sized up front: its separation is
+ * capped so the onward pair can work from the farther member (exact rule, best next planet); its
+ * window from A is required to the NEARER member (one member is always within sqrt(s² + half²));
+ * the next planet after a pair is sized to span the window from the smaller member and, on each
+ * failed try (a partner eclipse too long), moves toward the biggest, nearest placement; the spin
+ * ramps after zone 6 (config BINARY_SPIN_RAMP). Binary A checks start each member's phases just
+ * before its likely eclipse so a failing try fails early, and a re-check skips recent pairs the new
+ * body cannot reach (pairMayMeet): both only save work, never change a verdict.
+ *
  * Solvability with motion (honest, not "at time 0"):
  *   - A moving end of a pair is checked at SOLVE_*_PHASES positions spread over its whole motion
  *     (drift positions across ±amplitude; binary angles around the full circle, partner opposite).
@@ -70,7 +80,7 @@ import { CONFIG } from '../config.js';
 import { BODY, BODY_FLAG } from '../contracts.js';
 import { createRng, hash32 } from '../core/rng.js';
 import { rayCircleHit, OUT, TAU } from '../core/math.js';
-import { zoneOfPathIndex, captureBand, solveWindowReqDeg, solveWindowSpeed, pathSpacingMax, baseSpeedForZone } from './scoring.js';
+import { zoneOfPathIndex, captureBand, solveWindowReqDeg, solveWindowSpeed, pathSpacingMax, baseSpeedForZone, binaryAngularSpeed } from './scoring.js';
 import { envelopeOf, placeMotion, partnerOf, ENV, MOVING_FLAGS } from './hazards.js';
 
 /** @typedef {import('../contracts.js').WorldT} WorldT */
@@ -138,8 +148,12 @@ const PARTNER_REFINE = 6;
 /** Work units charged per scan (re)start (orbit radius, phase placement), per obstacle list built
  * and per spacing check (measured against the ray cost on a desktop). */
 const SCAN_COST = 350, PREP_COST = 800, SPACING_COST = 300;
+/** Work units per pairMayMeet test (beginCheck, for each recent pair not containing the new body). */
+const MEET_COST = 60;
 
 const KIND_PLAIN = 0, KIND_DRIFT = 1, KIND_BINARY = 2;
+/** After a binary pair, the next planet's tries reach the biggest, nearest placement after this many. */
+const POST_BINARY_TIGHTEN_TRIES = 2;
 
 // Placement job states (see runJob).
 const ST_IDLE = 0, ST_PATH_TRY = 1, ST_PATH_CHECK = 2, ST_FB_TRY = 3, ST_FB_CHECK = 4, ST_PATH_COMMIT = 5;
@@ -205,6 +219,20 @@ const E_CHECK = 0, E_MEASURE = 8;
 function eclipseMaxRun(b, a, K) {
   const om = b.m1[a] < 0 ? -b.m1[a] : b.m1[a];
   return Math.floor((CONFIG.BINARY_MAX_WAIT_S * om * K) / TAU + 1e-9) - 1;
+}
+
+/**
+ * Where checkRun starts a binary A's phases (Phase index of member a; its partner starts half a turn
+ * later): eclipseMaxRun + 1 phases before the one that puts member a farthest from B (the partner
+ * between them), so that member's eclipse comes early in the scan. The runs are tracked cyclically
+ * per combination, so any start gives the same verdict; this one only makes a failing check fail
+ * sooner (less wasted work on a re-roll). @param {Bodies} b @param {number} a @param {number} bi
+ * @param {number} K
+ */
+function eclipseStart(b, a, bi, K) {
+  const th = Math.atan2(b.m4[a] - b.y[bi], b.m3[a] - b.x[bi]) - b.m2[a];
+  const kf = Math.round((th / TAU) * K);
+  return (((kf - eclipseMaxRun(b, a, K) - 1) % K) + K) % K;
 }
 
 /** @param {number} base E_CHECK or E_MEASURE */
@@ -318,6 +346,73 @@ function spacingForWindow(rho, rB, ang) {
     if (Math.acos(c1 / d) - Math.acos(c2 / d) >= ang) lo = d; else hi = d;
   }
   SPW[0] = lo;
+}
+
+/** pairMayMeet scratch: the corners of the region the centres of a pair's ends sweep. */
+const HULL = new Float64Array(8);
+
+/** Is (px, py) inside triangle HULL points i, j, k (strictly, non-degenerate)? */
+function inTri(/** @type {number} */ px, /** @type {number} */ py, /** @type {number} */ i, /** @type {number} */ j, /** @type {number} */ k) {
+  const ax = HULL[2 * i], ay = HULL[2 * i + 1], bx = HULL[2 * j], by = HULL[2 * j + 1], cx = HULL[2 * k], cy = HULL[2 * k + 1];
+  const d1 = (bx - ax) * (py - ay) - (by - ay) * (px - ax);
+  const d2 = (cx - bx) * (py - by) - (cy - by) * (px - bx);
+  const d3 = (ax - cx) * (py - cy) - (ay - cy) * (px - cx);
+  return (d1 > 0 && d2 > 0 && d3 > 0) || (d1 < 0 && d2 < 0 && d3 < 0);
+}
+
+/**
+ * Can body k, anywhere in its motion, be an obstacle to a solving ray of pair A→B (any phase, any
+ * member, any orbit)? Conservative. Every solving ray runs from a point within rcA of an A member's
+ * centre to a point within rcB of a B member's centre (its entry into that ring), so it lies inside
+ * the convex hull of the two ends' centre envelopes (envelopeOf: segments; a binary's is its centre)
+ * thickened by D = the larger of (envelope reach + biggest ring) of the two ends. prepObstacles makes
+ * k an obstacle at clearance need (SOLVE_CLEARANCE from its surface, or its whole ring / influence)
+ * over its own envelope, so k matters only if that region comes within D of the hull. Moons never
+ * are obstacles (see rayOk). @param {Bodies} b @param {number} sa @param {number} sb @param {number} k
+ */
+function pairMayMeet(b, sa, sb, k) {
+  if (b.type[k] === BODY.MOON) return false;
+  let rcA = b.rc[sa], rcB = b.rc[sb];
+  const a2 = partnerOf(b, sa), b2 = partnerOf(b, sb);
+  if (a2 >= 0 && b.rc[a2] > rcA) rcA = b.rc[a2];
+  if (b2 >= 0 && b.rc[b2] > rcB) rcB = b.rc[b2];
+  envelopeOf(b, sa);
+  HULL[0] = ENV[0]; HULL[1] = ENV[1]; HULL[2] = ENV[2]; HULL[3] = ENV[3];
+  let d = ENV[4] + rcA;
+  envelopeOf(b, sb);
+  HULL[4] = ENV[0]; HULL[5] = ENV[1]; HULL[6] = ENV[2]; HULL[7] = ENV[3];
+  if (ENV[4] + rcB > d) d = ENV[4] + rcB;
+  envelopeOf(b, k);
+  let need = b.r[k] + CONFIG.SOLVE_CLEARANCE;
+  if (b.rc[k] > need) need = b.rc[k];
+  const reach = d + need + ENV[4];
+  const kx0 = ENV[0], ky0 = ENV[1], kx1 = ENV[2], ky1 = ENV[3];
+  // k's segment near any segment between two hull corners (the hull's edges among them)...
+  for (let i = 0; i < 4; i++) {
+    for (let j = i + 1; j < 4; j++) {
+      SEG[0] = kx0; SEG[1] = ky0; SEG[2] = kx1; SEG[3] = ky1;
+      SEG[4] = HULL[2 * i]; SEG[5] = HULL[2 * i + 1]; SEG[6] = HULL[2 * j]; SEG[7] = HULL[2 * j + 1]; SEG[8] = reach;
+      if (segsWithin()) return true;
+    }
+  }
+  // ... or inside the hull (the union of these four triangles).
+  return inTri(kx0, ky0, 0, 2, 3) || inTri(kx0, ky0, 1, 2, 3) || inTri(kx0, ky0, 0, 1, 2) || inTri(kx0, ky0, 0, 1, 3);
+}
+
+/**
+ * Inverse of spacingForWindow: the smallest ring radius rB (the ring a ray must reach) that still
+ * spans `ang` radians of tangent rays from an orbit of radius rho at centre distance d, into SPW[0]
+ * (d - rho if even that ring is too small). Placement after a binary pair uses it to size the next
+ * planet. @param {number} rho @param {number} d @param {number} ang
+ */
+function ringForWindow(rho, d, ang) {
+  let lo = 0, hi = d - rho;
+  if (hi <= 0 || Math.acos((rho - hi) / d) - Math.acos((rho + hi) / d) < ang) { SPW[0] = hi > 0 ? hi : 0; return; }
+  for (let k = 0; k < 24; k++) {
+    const m = (lo + hi) * 0.5;
+    if (Math.acos((rho - m) / d) - Math.acos((rho + m) / d) >= ang) hi = m; else lo = m;
+  }
+  SPW[0] = hi;
 }
 
 /**
@@ -841,8 +936,8 @@ export function createGenerator(world, opts = {}) {
   /** Seeds (uint32, kept out of Smi range): [0] path planet, [1] side planet / black hole. */
   const JSEED = new Uint32Array(2);
   /** Job doubles: band, A's reference centre x, y, A's reach, B's y, the segment's mid x. */
-  const JD = new Float64Array(9);
-  const J_BAND = 0, J_ACX = 1, J_ACY = 2, J_AREACH = 3, J_BY = 4, J_MIDX = 5, J_RHOA = 6, J_ANGA = 7, J_ANG0 = 8;
+  const JD = new Float64Array(10);
+  const J_BAND = 0, J_ACX = 1, J_ACY = 2, J_AREACH = 3, J_BY = 4, J_MIDX = 5, J_RHOA = 6, J_ANGA = 7, J_ANG0 = 8, J_ABIN = 9;
   // ---- the window check the job is running: pairs, progress, scan state.
   const PA = new Int32Array(MAX_CHECK), PB = new Int32Array(MAX_CHECK);
   /** [0] pair count, [1] pair, [2] phase, [3] member, [4] orbit, [5] direction (0 = CW, 1 = CCW). */
@@ -1017,21 +1112,26 @@ export function createGenerator(world, opts = {}) {
    * RECHECK_PAIRS - 1 before it (pairs whose start has been recycled are skipped), plus the onward
    * pair of every recent side planet aimed at one of those path planets, plus (if s >= 0) the new
    * side planet s → path planet `last`. Run it with checkRun.
-   * @param {number} last @param {number} s
+   * Only the bodies n1 and n2 (-1: none) are new since every one of those pairs last passed (bodies
+   * only ever leave in between, which can only widen a window), so a pair that does not contain
+   * them and that neither can come near (pairMayMeet) would pass again: it is not re-scanned.
+   * @param {number} last @param {number} s @param {number} n1 @param {number} n2
    */
-  function beginCheck(last, s) {
+  function beginCheck(last, s, n1, n2) {
     let n = 0;
+    const b = world.bodies;
     for (let p = last; p >= 1 && p > last - RECHECK_PAIRS; p--) {
       const sa = slotOfPathRaw(p - 1), sb = slotOfPathRaw(p);
       if (sa < 0 || sb < 0) continue;
+      if (!pairTouched(b, sa, sb, n1, n2)) continue;
       PA[n] = sa; PB[n] = sb; n++;
     }
-    const b = world.bodies;
     for (let k = 0; k < SIDE_RECENT; k++) {
       const sl = sideSlot[k], t = sideTarget[k];
       if (sl < 0 || t > last || t <= last - RECHECK_PAIRS || !b.alive[sl] || b.id[sl] !== sideId[k]) continue;
       const sb = slotOfPathRaw(t);
       if (sb < 0) continue;
+      if (!pairTouched(b, sl, sb, n1, n2)) continue;
       PA[n] = sl; PB[n] = sb; n++;
     }
     if (s >= 0) {
@@ -1062,7 +1162,10 @@ export function createGenerator(world, opts = {}) {
       const am = CK[3] === 0 ? sa : partnerOf(b, sa);
       const binA = mover === sa && partnerOf(b, sa) >= 0;
       if (am >= 0) {
-        if (mover >= 0) { savePos(b, mover); setPhase(b, mover, CK[2], K); }
+        // A binary A's phases run from just before each member's likely eclipse (eclipseStart), so
+        // a too-long eclipse fails the check early; the verdict does not depend on the order.
+        const k = binA ? (CK[2] + eclipseStart(b, sa, sb, K) + (CK[3] ? K >> 1 : 0)) % K : CK[2];
+        if (mover >= 0) { savePos(b, mover); setPhase(b, mover, k, K); }
         solveRadius(b, am, CK[4]);
         setMinEntry(b, sa, sb);
         const req = solveWindowReqDeg(b.zone[sb], RHO[0]);
@@ -1099,6 +1202,17 @@ export function createGenerator(world, opts = {}) {
     return 1;
   }
 
+  /**
+   * Must pair A→B be re-checked now that bodies n1, n2 (-1: none) are new? Yes if it contains one
+   * of them or one may come near its rays. Charges the budget. @param {Bodies} b @param {number} sa
+   * @param {number} sb @param {number} n1 @param {number} n2
+   */
+  function pairTouched(b, sa, sb, n1, n2) {
+    if (sa === n1 || sb === n1 || (n2 >= 0 && (sa === n2 || sb === n2))) return true;
+    BUD[0] -= MEET_COST;
+    return (n1 >= 0 && pairMayMeet(b, sa, sb, n1)) || (n2 >= 0 && pairMayMeet(b, sa, sb, n2));
+  }
+
   /** Kill side planets and black holes near height y (fallback). @param {number} y */
   function clearSidePlanets(y) {
     const b = world.bodies;
@@ -1129,13 +1243,26 @@ export function createGenerator(world, opts = {}) {
     return PL[1] < PL[0];
   }
 
-  /** Moving kind for a new path planet in zone z (rolled only when movers exist there). @param {number} z */
+  /**
+   * Moving kind for a new path planet in zone z, rolled only after a static path planet (two moving
+   * path planets never follow each other). The binary rate is a share of ALL path planets (config.js:
+   * "chance a path planet is a binary pair"): a planet right after a mover cannot move, so the roll
+   * here is raised to make up for those, pB = fB (1 + pD) / (1 - fB), which gives a long-run share
+   * pB / (1 + pB + pD) = fB. Where that does not fit beside the drift chance (pB + pD > 1; at most
+   * every other planet can move), binaries keep their share (pB = 2 fB) and drift takes what is left.
+   * The drift chance stays a chance per roll, as before. One draw either way. @param {number} z
+   */
   function rollMover(z) {
     if (z < 3) return KIND_PLAIN;
     rate(z, 5, CONFIG.HAZARD_BINARY_INTRO, CONFIG.HAZARD_BINARY_LATER);
-    const pB = PL[0];
+    const fB = PL[0];
     rate(z, 3, CONFIG.HAZARD_DRIFT_INTRO, CONFIG.HAZARD_DRIFT_LATER);
-    const pD = PL[0];
+    let pD = PL[0];
+    let pB = fB > 0 ? (fB * (1 + pD)) / (1 - fB) : 0;
+    if (pB + pD > 1) {
+      pB = 2 * fB > 1 ? 1 : 2 * fB;
+      pD = 1 - pB;
+    }
     const u = rnd();
     return u < pB ? KIND_BINARY : u < pB + pD ? KIND_DRIFT : KIND_PLAIN;
   }
@@ -1155,10 +1282,14 @@ export function createGenerator(world, opts = {}) {
     JD[J_ACX] = aBin ? b.m3[a] : aDrift ? b.m0[a] : b.x[a];
     JD[J_ACY] = aBin ? b.m4[a] : b.y[a];
     JD[J_AREACH] = aBin ? b.m0[a] : aDrift ? Math.abs(b.m1[a]) : 0;
-    // Window B must span from A's mid-band orbit (the narrower of the two checked), with margin.
+    JD[J_ABIN] = aBin ? 1 : 0;
+    // Window B must span from A's mid-band orbit (the narrower of the two checked), with margin;
+    // from a binary A, from the smaller member's (both members need it).
     solveRadius(b, a, 0);
     JD[J_RHOA] = RHO[0];
-    JD[J_ANG0] = solveWindowReqDeg(z, RHO[0]) * (Math.PI / 180);
+    const a2 = partnerOf(b, a);
+    if (a2 >= 0) { solveRadius(b, a2, 0); if (RHO[0] < JD[J_RHOA]) JD[J_RHOA] = RHO[0]; }
+    JD[J_ANG0] = solveWindowReqDeg(z, JD[J_RHOA]) * (Math.PI / 180);
     JD[J_ANGA] = JD[J_ANG0] * WINDOW_SHAPE_MARGIN;
     jflags = rnd() < CONFIG.RINGED_FRACTION ? BODY_FLAG.RINGED : 0;
     JSEED[0] = hash32(rng.u30());
@@ -1188,32 +1319,62 @@ export function createGenerator(world, opts = {}) {
     }
     const kind = jkind, partner = jpartner;
     const rMax = kind === KIND_BINARY ? CONFIG.BINARY_R_MAX : CONFIG.PLANET_R_MAX;
-    const r = CONFIG.PLANET_R_MIN + (rMax - CONFIG.PLANET_R_MIN) * rnd();
+    /** @type {number} */
+    let rMin = CONFIG.PLANET_R_MIN;
+    let tighten = 0;
+    if (kind === KIND_PLAIN && JD[J_ABIN] > 0) {
+      // After a binary pair (the window is needed from its smaller member's orbit, out to where
+      // the farther member can be: PATH_SPACING_MIN + 2 × its reach): a ring big enough to span it
+      // at the nearest spacing, with the shaping margin if any planet size allows, else without.
+      const d = CONFIG.PATH_SPACING_MIN + 2 * aReach;
+      ringForWindow(JD[J_RHOA], d, JD[J_ANGA]);
+      let need = SPW[0] - band + SOLVE_RING_MARGIN;
+      if (need > CONFIG.PLANET_R_MAX) { ringForWindow(JD[J_RHOA], d, JD[J_ANG0]); need = SPW[0] - band + SOLVE_RING_MARGIN; }
+      if (need > CONFIG.PLANET_R_MAX) need = CONFIG.PLANET_R_MAX;
+      if (need > rMin) rMin = need;
+      // Each failed try (mostly a partner eclipse too long at the window's edge) moves the next one
+      // toward the biggest, nearest planet, which shortens the eclipse most.
+      tighten = jt >= POST_BINARY_TIGHTEN_TRIES ? 1 : jt / POST_BINARY_TIGHTEN_TRIES;
+      rMin += (CONFIG.PLANET_R_MAX - rMin) * tighten;
+    }
+    const r = rMin + (rMax - rMin) * rnd();
     let reach = 0, r2 = 0, half = 0;
     if (kind === KIND_BINARY) {
       r2 = CONFIG.PLANET_R_MIN + (CONFIG.BINARY_R_MAX - CONFIG.PLANET_R_MIN) * rnd();
       let sepMin = (r > r2 ? r : r2) + (r < r2 ? r : r2) + band + BODY_GAP;
       if (sepMin < CONFIG.BINARY_SEPARATION_MIN) sepMin = CONFIG.BINARY_SEPARATION_MIN;
-      const sep = sepMin < CONFIG.BINARY_SEPARATION_MAX
-        ? sepMin + (CONFIG.BINARY_SEPARATION_MAX - sepMin) * rnd() : sepMin;
-      half = sep * 0.5;
+      // The pair's own onward pair (its next planet sits PATH_SPACING_MIN beyond the nearer member,
+      // so up to PATH_SPACING_MIN + separation from the farther one) must stay feasible under the
+      // time rule from the smaller member's mid-band orbit, for the biggest next planet: that caps
+      // the separation. Unmargined: the next placement shapes itself to it (see rMin above).
+      const zn = zoneOfPathIndex(jp + 1), rhoB = (r < r2 ? r : r2) + band * 0.5;
+      spacingForWindow(rhoB, CONFIG.PLANET_R_MAX + captureBand(zn) - SOLVE_RING_MARGIN,
+        solveWindowReqDeg(zn, rhoB) * (Math.PI / 180));
+      let sepMax = SPW[0] - CONFIG.PATH_SPACING_MIN;
+      if (sepMax > CONFIG.BINARY_SEPARATION_MAX) sepMax = CONFIG.BINARY_SEPARATION_MAX;
+      const u = rnd();
+      if (sepMax < sepMin) return false;
+      half = (sepMin + (sepMax - sepMin) * u) * 0.5;
       reach = half;
     } else if (kind === KIND_DRIFT) reach = CONFIG.DRIFT_AMPLITUDE;
     // Centre-to-centre spacing stays inside [PATH_SPACING_MIN, smax] at every moment, and (time
     // rule) near enough that B's ring spans the required window from A even at the far end of the
     // motion (spacingForWindow, for the smaller member of a binary). A try that cannot meet it at
     // all, even at the minimum spacing, is re-rolled before any window scan.
+    // A binary B (A is static: never two movers in a row) only needs its NEARER member's ring in
+    // reach: whatever the pair's angle, one member is at most sqrt(s² + half²) from A's centre.
     const rBody = kind === KIND_BINARY && r2 < r ? r2 : r;
     const sLo = CONFIG.PATH_SPACING_MIN + aReach + reach;
     let sHi = pathSpacingMax(z) - aReach - reach;
     spacingForWindow(JD[J_RHOA], rBody + band - SOLVE_RING_MARGIN, JD[J_ANGA]);
-    const sWin = SPW[0] - aReach - reach;
+    let sWin = kind !== KIND_BINARY ? SPW[0] - aReach - reach : SPW[0] > half ? Math.sqrt(SPW[0] * SPW[0] - half * half) : 0;
     if (sWin < sHi) sHi = sWin > sLo ? sWin : sLo;
     if (sWin < sLo) {
       spacingForWindow(JD[J_RHOA], rBody + band - SOLVE_RING_MARGIN, JD[J_ANG0]);
-      if (SPW[0] - aReach - reach < sLo) return false;
+      sWin = kind !== KIND_BINARY ? SPW[0] - aReach - reach : SPW[0] > half ? Math.sqrt(SPW[0] * SPW[0] - half * half) : 0;
+      if (sWin < sLo) return false;
     }
-    if (kind !== KIND_PLAIN) {
+    if (kind === KIND_DRIFT) {
       // A moving B must leave its own onward pair feasible: the next planet sits at least
       // PATH_SPACING_MIN + reach away and B's motion adds up to `reach` more.
       const zn = zoneOfPathIndex(jp + 1), rhoB = rBody + band * 0.5;
@@ -1221,7 +1382,7 @@ export function createGenerator(world, opts = {}) {
         solveWindowReqDeg(zn, rhoB) * (Math.PI / 180) * WINDOW_SHAPE_MARGIN);
       if (SPW[0] < CONFIG.PATH_SPACING_MIN + 2 * reach) return false;
     }
-    const s = sLo + (sHi > sLo ? (sHi - sLo) * rnd() : 0);
+    const s = sLo + (sHi > sLo ? (sHi - sLo) * (1 - tighten) * rnd() : 0);
     let lo = acx - PATH_DX_FRACTION * s, hi = acx + PATH_DX_FRACTION * s;
     const xMin = CONFIG.PLANET_X_MIN + (kind === KIND_PLAIN ? 0 : reach);
     const xMax = CONFIG.PLANET_X_MAX - (kind === KIND_PLAIN ? 0 : reach);
@@ -1245,7 +1406,9 @@ export function createGenerator(world, opts = {}) {
       writePlanet(slot, jp, z, jflags | BODY_FLAG.BINARY, seed);
       PL[0] = x; PL[1] = by; PL[2] = r2; PL[3] = r2 + band;
       writePlanet(partner, jp, z, BODY_FLAG.BINARY | (seed & 1 ? BODY_FLAG.RINGED : 0), hash32(seed ^ 0x2545f491));
-      const w = (rnd() < 0.5 ? -1 : 1) * CONFIG.BINARY_ANGULAR_SPEED;
+      // The spin is set for the pair's onward pair (the next planet's zone: its time rule decides how
+      // long a partner eclipse lasts), so the last pair of a zone turns like the next zone's.
+      const w = (rnd() < 0.5 ? -1 : 1) * binaryAngularSpeed(zoneOfPathIndex(jp + 1));
       const th = TAU * rnd();
       b.m0[slot] = b.m0[partner] = half;
       b.m1[slot] = b.m1[partner] = w;
@@ -1466,7 +1629,7 @@ export function createGenerator(world, opts = {}) {
             gen.fallbacks++;
             if (jpartner >= 0) { freeBody(jpartner); jpartner = -1; }
             jkind = KIND_PLAIN; jt = 0; st = ST_FB_TRY;
-          } else if (pathTry()) { beginCheck(jp, -1); st = ST_PATH_CHECK; }
+          } else if (pathTry()) { beginCheck(jp, -1, jslot, jpartner); st = ST_PATH_CHECK; }
           else { hideTry(jslot); gen.rerolls++; jt++; }
           break;
         case ST_PATH_CHECK: {
@@ -1478,7 +1641,7 @@ export function createGenerator(world, opts = {}) {
         }
         case ST_FB_TRY:
           if (jt >= 2) st = ST_PATH_COMMIT; // last resort: keep the plain placement as it is
-          else if (fallbackTry()) { beginCheck(jp, -1); st = ST_FB_CHECK; }
+          else if (fallbackTry()) { beginCheck(jp, -1, jslot, -1); st = ST_FB_CHECK; }
           else { clearSidePlanets(JD[J_ACY]); jt++; }
           break;
         case ST_FB_CHECK: {
@@ -1506,7 +1669,7 @@ export function createGenerator(world, opts = {}) {
         case ST_SIDE_TRY:
           if (jt >= SIDE_TRIES) { freeBody(xslot); st = ST_BH_ROLL; break; }
           jt++;
-          if (sideTry()) { beginCheck(jp, xslot); st = ST_SIDE_CHECK; }
+          if (sideTry()) { beginCheck(jp, xslot, xslot, -1); st = ST_SIDE_CHECK; }
           else hideTry(xslot);
           break;
         case ST_SIDE_CHECK: {
@@ -1539,7 +1702,7 @@ export function createGenerator(world, opts = {}) {
           break;
         case ST_BH_TRY:
           if (jt >= CONFIG.BLACKHOLE_TRIES) { freeBody(xslot); st = ST_MOTE_ROLL; break; }
-          if (bhTry()) { beginCheck(jp, -1); st = ST_BH_CHECK; }
+          if (bhTry()) { beginCheck(jp, -1, xslot, -1); st = ST_BH_CHECK; }
           else hideTry(xslot);
           jt++;
           break;

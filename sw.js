@@ -8,7 +8,7 @@
 // - On loopback hosts (localhost / 127.0.0.1) it is network-first with cache fallback instead, so
 //   local edits show without a rebuild; register with ?strategy=cache to force cache-first there.
 // - Files outside the precache list (dev pages) are network-first and cached for offline use.
-const VERSION = "0.1.0+3f4f7cf0";
+const VERSION = "0.1.0+c2951b5f";
 const FILES = ["css/app.css","icons/icon-180.png","icons/icon-192.png","icons/icon-512.png","icons/icon.svg","index.html","manifest.webmanifest","src/audio/engine.js","src/audio/graph.js","src/audio/music.js","src/audio/sfx.js","src/config.js","src/contracts.js","src/core/events.js","src/core/math.js","src/core/rng.js","src/main.js","src/platform/input.js","src/platform/lifecycle.js","src/platform/pwa.js","src/platform/storage.js","src/render/background.js","src/render/bodies.js","src/render/camera.js","src/render/fx.js","src/render/gl.js","src/render/particles.js","src/render/post.js","src/render/renderer.js","src/render/scaler.js","src/render/shaders/background.js","src/render/shaders/bodies.js","src/render/shaders/common.js","src/render/shaders/fx.js","src/render/shaders/particles.js","src/render/shaders/post.js","src/sim/bot.js","src/sim/generator.js","src/sim/hazards.js","src/sim/scoring.js","src/sim/world.js","src/ui/debug.js","src/ui/hud.js","src/ui/numtext.js","src/ui/screens.js","src/version.js"];
 
 const CACHE = `slingstar-${VERSION}`;
