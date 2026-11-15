@@ -59,6 +59,9 @@ runs at all.
 
 ## Development
 
+**Next steps** (steer, refill power-ups, difficulty modes and smaller follow-ups) are in
+[`docs/ROADMAP.md`](docs/ROADMAP.md), with design notes, constraints and how to land a change.
+
 Requirements: Node.js (any current release) and `npm install` for the two dev dependencies
 (Playwright for WebKit tests, TypeScript for type checks). Nothing in `node_modules/` ships.
 
@@ -110,7 +113,7 @@ src/platform/                               input, lifecycle, storage, service w
 tests/                                      node --test suites
 tools/                                      server, smoke test, precache and icon builders
 scripts/deploy.sh                           local deploy for the phone
-docs/                                       README screenshots (not shipped in the precache)
+docs/                                       ROADMAP.md and README screenshots (not shipped in the precache)
 ```
 
 `src/sim/` never touches the DOM, timers or `Math.random`, so it runs unchanged under Node. The
