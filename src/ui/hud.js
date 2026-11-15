@@ -29,6 +29,7 @@ const LONG_SCORE = 1000000;
 const SCORE_INTERVAL_MS = 80;
 /** Combo is shown from this value up (a "combo" of 1 is just a catch). */
 const COMBO_SHOW_MIN = 2;
+const HULL_SEGMENTS = Math.round((1 - CONFIG.BRACE_MIN_SIZE) / CONFIG.BRACE_SIZE_LOSS);
 
 /**
  * @param {string} tag @param {string} cls @param {HTMLElement} [parent] @param {string} [text]
@@ -69,6 +70,15 @@ export function createHud(root) {
   const comboN = el('div', 'hud-combo-n', combo);
   el('div', 'hud-combo-l', combo, 'COMBO');
   const perfect = el('div', 'hud-perfect', root, 'PERFECT');
+  const braceCue = el('div', 'hud-perfect hud-brace-cue', root, 'BRACE!');
+  const braced = el('div', 'hud-perfect hud-braced', root, 'BRACED');
+  // Hull: how many braces are left (size above BRACE_MIN_SIZE, in BRACE_SIZE_LOSS steps). Shown
+  // once the comet has taken a hit.
+  const hull = el('div', 'hud-hull off', root);
+  el('span', 'hud-hull-l', hull, 'HULL');
+  const hullTrack = el('span', 'hud-hull-track', hull);
+  const hullFill = el('span', 'hud-hull-fill', hullTrack);
+  for (let i = 1; i < HULL_SEGMENTS; i++) el('span', 'hud-hull-tick', hullTrack).style.left = `${(100 * i) / HULL_SEGMENTS}%`;
   const sling = el('div', 'hud-perfect hud-sling', root, 'SLINGSHOT');
   const missionEl = el('div', 'hud-mission', root);
   el('div', 'hud-mission-k', missionEl, '★ MISSION COMPLETE');
@@ -94,6 +104,11 @@ export function createHud(root) {
   const slingFlash = new Retrigger(sling, 'on');
   const zoneBanner = new Retrigger(zone, 'on');
   const missionToast = new Retrigger(missionEl, 'on');
+  const braceFlash = new Retrigger(braceCue, 'on');
+  const bracedFlash = new Retrigger(braced, 'on');
+  /** Hull fill shown, in hundredths (-1 = not yet written). */
+  let shownHull = -1;
+  let hullOn = false;
 
   let longScore = false;
   /** Score shown in the DOM, when it was written (performance.now ms), and "write the next change at once". */
@@ -153,6 +168,14 @@ export function createHud(root) {
       }
       setMult(s.multiplier);
       setCombo(s.combo);
+      const size = world.comet.size;
+      const h = Math.round(Math.max(0, Math.min(1, (size - CONFIG.BRACE_MIN_SIZE) / (1 - CONFIG.BRACE_MIN_SIZE))) * 100);
+      if (h !== shownHull) {
+        shownHull = h;
+        hullFill.style.width = `${h}%`;
+        hull.classList.toggle('low', h <= 100 / HULL_SEGMENTS + 0.5);
+        if (!hullOn && h < 100) { hullOn = true; hull.classList.remove('off'); }
+      }
     },
     onEvent(type, _x, _y, a, _b) {
       if (type === EV.ZONE_CHANGE) showZone(a);
@@ -160,6 +183,8 @@ export function createHud(root) {
       else if (type === EV.PERFECT) { perfectFlash.fire(); scoreNow = true; }
       else if (type === EV.LATCH) scoreNow = true;
       else if (type === EV.SLINGSHOT) slingFlash.fire();
+      else if (type === EV.IMPACT) braceFlash.fire();
+      else if (type === EV.BRACE) { braceFlash.stop(); bracedFlash.fire(); }
     },
     mission(label) {
       missionText.textContent = label;
@@ -187,6 +212,8 @@ export function createHud(root) {
       lastMult = 0; setMult(1);
       lastCombo = -1; setCombo(0);
       comboPop.stop(); perfectFlash.stop(); slingFlash.stop(); zoneBanner.stop(); missionToast.stop();
+      braceFlash.stop(); bracedFlash.stop();
+      shownHull = -1; hullOn = false; hull.classList.add('off');
     },
   };
 }

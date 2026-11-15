@@ -302,7 +302,8 @@ export function createFx() {
       const c = world.comet;
       if (c.state !== COMET.DEAD) {
         const sp = c.speed;
-        const hy = 30;
+        // Smaller after braces (size 1 → 0.5 shows at 70%).
+        const hy = 30 * (0.4 + 0.6 * c.size);
         const asp = 1 + Math.min(sp, 2400) * 0.00055;
         const ch = Math.cos(c.heading), sh = Math.sin(c.heading);
         S[0] = cam.cometX - vx; S[1] = cam.cometY - vy; S[2] = hy * asp; S[3] = hy; S[4] = ch;
@@ -310,7 +311,7 @@ export function createFx() {
         S[11] = 1;
         commitSprite();
         // Wide soft halo for presence.
-        S[0] = cam.cometX - vx; S[1] = cam.cometY - vy; S[2] = 90; S[3] = 90; S[4] = 1; S[5] = 0;
+        S[0] = cam.cometX - vx; S[1] = cam.cometY - vy; S[2] = 3 * hy; S[3] = 3 * hy; S[4] = 1; S[5] = 0;
         S[6] = SHAPE.GLOW; S[7] = 0; S[8] = tier[0]; S[9] = tier[1]; S[10] = tier[2]; S[11] = 0.22;
         commitSprite();
       }

@@ -205,6 +205,21 @@ export const CONFIG = Object.freeze({
   BLACKHOLE_SLINGSHOT_MIN_SCALE: 0.4,
   // ---------------------------------------------------------------- end sim rules (Phase 4)
 
+  // ---------------------------------------------------------------- brace (2026-11)
+  /** Flying into a body (not holding) pauses the comet at the contact point for this long; a press
+   * in that time, or one this long before the contact, braces: the comet bounces off and loses
+   * BRACE_SIZE_LOSS of its size. With no press it dies at the end of the window. Sim seconds. */
+  BRACE_WINDOW_S: 0.2,
+  BRACE_SIZE_LOSS: 0.1,
+  /** A brace that would leave the comet smaller than this is fatal (from full size: 5 braces). */
+  BRACE_MIN_SIZE: 0.5,
+  /** Each stardust mote regrows this much size, up to 1. */
+  BRACE_DUST_REFILL: 0.01,
+  /** A braced comet leaves the surface this far outside the hit radius, and this fraction slower
+   * (not below the zone's base speed). */
+  BRACE_PUSH_OUT: 2,
+  BRACE_SPEED_LOSS: 0.1,
+
   // ---------------------------------------------------------------- generation
   MAX_BODIES: 64,
   MAX_MOTES: 256,

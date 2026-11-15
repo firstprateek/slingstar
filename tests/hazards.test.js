@@ -124,7 +124,9 @@ test('black hole: bends free flight with accel = G / r², clamped, only inside t
 test('black hole: cannot be orbited (a press inside the influence only arms); the core kills', () => {
   const w = emptyWorld();
   const h = addBlackHole(w, 500, 3000);
-  setFree(w, 500, 2780, 0, 800); // 220 from the centre, inside the influence radius
+  // 290 from the centre, inside the influence radius, and slow: the core is reached well after
+  // BRACE_WINDOW_S, so this press only arms (it is not a brace).
+  setFree(w, 500, 2710, 0, 300);
   const d = driver(w);
   const ev = d.step(true);
   assert.equal(ofType(ev, EV.LATCH).length, 0);
@@ -456,4 +458,17 @@ test('a release on a lit aim line catches the lit planet (hazard zones, 40 seeds
   t.diagnostic(`${releases} lit releases, ${broken} broken${fails.length ? `: ${fails.slice(0, 5).join('; ')}` : ''}`);
   assert.ok(releases > 1500);
   assert.equal(broken, 0);
+});
+
+test('brace off a black-hole core pays no slingshot', async () => {
+  const { driver: drv } = await import('./helpers.js');
+  const w = emptyWorld();
+  addBlackHole(w, 500, 3000);
+  setFree(w, 500, 2710, 0, 300);
+  const d = drv(w);
+  let n = 0;
+  while (w.comet.impact < 0 && !w.dead && n++ < 600) d.step(false);
+  const ev = [...d.step(true), ...d.run(false, 240)];
+  assert.equal(ofType(ev, EV.BRACE).length, 1);
+  assert.equal(ofType(ev, EV.SLINGSHOT).length, 0);
 });

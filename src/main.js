@@ -387,6 +387,9 @@ function boot(renderer) {
       case EV.SLINGSHOT:
         runStats.sling++;
         break;
+      case EV.BRACE:
+        runStats.braces++;
+        break;
       case EV.DEATH:
         deathT = 0; nearT = -1;
         onDeath();

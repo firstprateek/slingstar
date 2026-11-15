@@ -135,6 +135,26 @@ button { font: inherit; color: inherit; -webkit-tap-highlight-color: transparent
 }
 .hud-perfect.on { animation: perfect-flash 0.95s ease-out forwards; }
 .hud-perfect.on2 { animation: perfect-flash-b 0.95s ease-out forwards; }
+.hud-brace-cue { color: #fff; text-shadow: var(--legible), 0 0 10px #ff6a3d, 0 0 26px rgba(255, 90, 50, 0.9); }
+.hud-braced { color: #fffbe8; }
+.hud-hull {
+  /* Under the multiplier, clear of the PERFECT / BRACE flashes. */
+  position: absolute; left: calc(var(--sal) + 16px); top: calc(var(--sat) + 112px);
+  display: flex; align-items: center; gap: 8px; transition: opacity 0.3s;
+  font-weight: 800; font-size: 9px; letter-spacing: 0.24em; color: var(--muted); text-shadow: var(--legible);
+}
+.hud-hull.off { opacity: 0; }
+.hud-hull-track {
+  position: relative; width: 96px; height: 6px; border-radius: 3px; overflow: hidden;
+  background: rgba(255, 255, 255, 0.12); border: 1px solid var(--line);
+}
+.hud-hull-fill {
+  position: absolute; left: 0; top: 0; bottom: 0; width: 100%; background: var(--gold);
+  box-shadow: 0 0 8px rgba(255, 196, 77, 0.8); transition: width 0.25s;
+}
+.hud-hull.low .hud-hull-fill { background: #ff6a3d; box-shadow: 0 0 8px rgba(255, 90, 50, 0.9); }
+.hud-hull-tick { position: absolute; top: 0; bottom: 0; width: 1.5px; margin-left: -0.75px; background: rgba(3, 4, 14, 0.85); }
+#hud.title-mode .hud-hull { display: none; }
 .hud-sling { color: #fff; text-shadow: var(--legible), 0 0 10px var(--accent), 0 0 26px rgba(var(--accent-rgb), 0.85); }
 @keyframes perfect-flash {
   0% { opacity: 0; transform: scale(1.35); }

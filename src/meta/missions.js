@@ -34,6 +34,7 @@ export const MISSION_TYPES = Object.freeze([
   { id: 'score', targets: [2500, 6000, 12000, 20000, 35000], step: 15000, label: (n) => `Score ${fmt(n)} in one run` },
   { id: 'total', targets: [40, 120, 250, 500, 1000], step: 500, total: true, label: (n) => `Catch ${n} planets in total` },
   { id: 'near', targets: [1, 2, 3, 5], step: 2, minZone: 2, label: (n) => (n === 1 ? 'Survive a near miss' : `${n} near misses in one run`) },
+  { id: 'brace', targets: [1, 2, 3, 4], step: 1, label: (n) => (n === 1 ? 'Brace through an impact' : `Brace through ${n} impacts in one run`) },
   { id: 'sling', targets: [1, 2, 3, 5], step: 2, minZone: 4, label: (n) => (n === 1 ? 'Slingshot past a black hole' : `${n} black-hole slingshots in one run`) },
 ]);
 
@@ -71,11 +72,12 @@ export function targetFor(type, level) {
  * @property {number} motes
  * @property {number} near
  * @property {number} sling
+ * @property {number} braces
  */
 
 /** @returns {RunStats} */
 export function emptyRunStats() {
-  return { path: 0, zone: 1, combo: 0, score: 0, catches: 0, perfects: 0, motes: 0, near: 0, sling: 0 };
+  return { path: 0, zone: 1, combo: 0, score: 0, catches: 0, perfects: 0, motes: 0, near: 0, sling: 0, braces: 0 };
 }
 
 /** @param {any} v @returns {number} non-negative integer, 0 for junk */
@@ -156,6 +158,7 @@ export function createMissions(saved, rand) {
       case 'total': return totalCatches + run.catches;
       case 'near': return run.near;
       case 'sling': return run.sling;
+      case 'brace': return run.braces;
       default: return 0;
     }
   }
