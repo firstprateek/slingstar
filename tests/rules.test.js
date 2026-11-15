@@ -139,7 +139,7 @@ test('perfect threshold: 14% radial is perfect, 16% is not', () => {
 test('orbit decays at 15 + 25 × laps units/s, speed rises 6%/s, and holding too long crashes', () => {
   const w = emptyWorld();
   const p = addPlanet(w, 500, 3000, 80, 250);
-  setFree(w, 700, 3000, 0, 800);
+  setFree(w, 700, 3000, 0, 700); // below the zone 1 speed cap (BASE_SPEED_START × SPEED_CAP_FACTOR)
   const d = driver(w);
   const all = d.step(true);
   const c = w.comet;
@@ -155,7 +155,7 @@ test('orbit decays at 15 + 25 × laps units/s, speed rises 6%/s, and holding too
       near(prevR - c.orbitRadius, (CONFIG.ORBIT_DECAY_BASE + CONFIG.ORBIT_DECAY_PER_LAP * laps) * STEP, 1e-9, 'decay rate after a lap');
       checkedRate = true;
     }
-    if (steps === 120) near(c.speed, 800 * Math.pow(1 + CONFIG.ORBIT_SPEED_GAIN * STEP, 120), 1e-6, 'speed after 1s');
+    if (steps === 120) near(c.speed, 700 * Math.pow(1 + CONFIG.ORBIT_SPEED_GAIN * STEP, 120), 1e-6, 'speed after 1s');
     prevR = c.orbitRadius;
   }
   assert.ok(checkedRate);

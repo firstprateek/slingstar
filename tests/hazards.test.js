@@ -143,7 +143,8 @@ test('black hole: cannot be orbited (a press inside the influence only arms); th
 test('black hole: surviving a deep pass pays the full slingshot (EV.SLINGSHOT, 250 × multiplier, ×1.12 speed); a shallow pass pays less', () => {
   const w = emptyWorld();
   const h = addBlackHole(w, 500, 3000);
-  setFree(w, 680, 2500, 0, 800);
+  // 700: below the zone 1 speed cap with the boost (BASE_SPEED_START × SPEED_CAP_FACTOR × BLACKHOLE_SPEED_BOOST).
+  setFree(w, 680, 2500, 0, 700);
   w.score.combo = 4; w.score.tier = 2; w.score.multiplier = 2;
   const d = driver(w);
   let ev = [], before = 0, speedBefore = 0;
@@ -157,9 +158,9 @@ test('black hole: surviving a deep pass pays the full slingshot (EV.SLINGSHOT, 2
   assert.equal(s[0].a, h);
   assert.equal(s[0].b, CONFIG.BLACKHOLE_SLINGSHOT_POINTS * 2);
   assert.ok(w.score.score - before >= CONFIG.BLACKHOLE_SLINGSHOT_POINTS * 2);
-  // Gravity is conservative: the speed on the way out is back near 800, then the boost applies.
-  near(speedBefore, 800, 15, 'speed just before leaving');
-  near(w.comet.speed, 800 * CONFIG.BLACKHOLE_SPEED_BOOST, 20, 'boosted speed');
+  // Gravity is conservative: the speed on the way out is back near 700, then the boost applies.
+  near(speedBefore, 700, 15, 'speed just before leaving');
+  near(w.comet.speed, 700 * CONFIG.BLACKHOLE_SPEED_BOOST, 20, 'boosted speed');
   assert.ok(w.comet.speed > speedBefore * (CONFIG.BLACKHOLE_SPEED_BOOST - 0.02));
   assert.equal(w.dead, false);
   assert.equal(ofType(d.run(false, 120), EV.SLINGSHOT).length, 0, 'one slingshot per pass');
@@ -257,7 +258,7 @@ test('black hole: a release on a lit bent aim line flies exactly along world.aim
   // The flight stays on the drawn path (to float32 precision) and passes through every vertex.
   const seen = new Uint8Array(n);
   let flown = Math.hypot(w.comet.x - x0, w.comet.y - y0); // the release step's own move
-  while (flown < drawn - 1) {
+  while (flown < drawn - 1e-6) { // a vertex can sit just short of the end of the drawn line
     const px = w.comet.x - x0, py = w.comet.y - y0;
     assert.ok(offLine(px, py) < 1e-3, `on the drawn path at ${flown.toFixed(1)}`);
     for (let k = 0; k < n; k++) if (Math.hypot(px - pts[2 * k], py - pts[2 * k + 1]) < 1e-3) seen[k] = 1;

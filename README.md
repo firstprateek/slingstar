@@ -1,16 +1,26 @@
 # Slingstar
 
-A one-thumb orbital slingshot game for the iPhone home screen. The comet climbs an endless field
+### ▶ Play: https://firstprateek.github.io/slingstar/
+
+<p align="center">
+  <img src="docs/title.jpg" alt="Slingstar title screen with today's missions" width="270">
+  <img src="docs/play.jpg" alt="Slingstar mid-run: the comet orbiting a planet with the aim line lit" width="270">
+  <img src="docs/gameover.jpg" alt="Slingstar game-over card with finished missions" width="270">
+</p>
+
+A one-thumb orbital slingshot game for the phone and the browser. The comet climbs an endless field
 of planets: hold to latch into orbit, release to fling off along the tangent, catch the next
 planet, and stay ahead of the wall of light rising from below.
 
 It is a static web app: plain JavaScript ES modules, raw WebGL2, synthesised WebAudio, no build
-step and no runtime dependencies. It installs to the home screen from Safari and works offline.
+step and no runtime dependencies. It runs in any current desktop or mobile browser with WebGL2,
+installs to the iPhone home screen from Safari and works offline.
 
 ## How to play
 
 - **The whole screen is the button.** Hold inside a planet's capture ring to orbit it; let go to
-  fly off in a straight line along the dotted aim line.
+  fly off in a straight line along the dotted aim line. On a computer, hold the mouse button or the
+  space bar. Space or Enter also plays again after a run; Escape or P pauses.
 - Press early and the hold stays armed: the comet latches the moment it enters a ring.
 - The aim line lights up in the zone's colour when releasing now would reach the next planet.
 - Orbits slowly decay. Hold too long and you crash into the planet.
@@ -19,6 +29,9 @@ step and no runtime dependencies. It installs to the home screen from Safari and
 - Graze close to a surface, collect stardust and slingshot past black holes for extra points.
 - Every 10 planets is a new zone with a new hazard: moons, drifting planets, black holes and
   binary pairs.
+- **Missions:** three short goals at a time (catch 15 planets in one run, reach zone 4, collect
+  stardust, slingshot a black hole...). Each one finished earns a star and is swapped for a new,
+  slightly harder goal at the start of the next run. Progress and stars stay on the device.
 - **Daily** plays the same course for everyone on a given date; **Endless** is a new course every
   run. Best scores are kept per mode (per date for Daily).
 - The pause button (top right) has Resume, Restart, the sound toggle, the build version and a
@@ -26,7 +39,8 @@ step and no runtime dependencies. It installs to the home screen from Safari and
 
 ## Add it to the iPhone home screen
 
-1. Open the game's HTTPS address in **Safari** on the iPhone.
+1. Open https://firstprateek.github.io/slingstar/ (or your own deploy's HTTPS address) in
+   **Safari** on the iPhone.
 2. Tap **Share**, then **Add to Home Screen**, then **Add**.
 3. Launch it from the new icon. It runs full-screen in portrait and keeps working offline.
 
@@ -85,10 +99,12 @@ src/sim/                                    pure deterministic simulation, level
 src/render/                                 WebGL2 renderer, shaders, bloom, particles
 src/audio/                                  WebAudio engine, music scheduler, SFX
 src/ui/                                     HUD, screens, debug overlay
+src/meta/                                   run missions (pure; progress kept in localStorage)
 src/platform/                               input, lifecycle, storage, service worker registration
 tests/                                      node --test suites
 tools/                                      server, smoke test, precache and icon builders
 scripts/deploy.sh                           local deploy for the phone
+docs/                                       README screenshots (not shipped in the precache)
 ```
 
 `src/sim/` never touches the DOM, timers or `Math.random`, so it runs unchanged under Node. The
@@ -96,7 +112,12 @@ renderer, audio and HUD only read world state, and the frame loop allocates noth
 
 ## Deploy
 
-`scripts/deploy.sh` publishes the game from a Mac to a phone on the same Tailscale network. It
+**GitHub Pages** serves the repository root of `main` at https://firstprateek.github.io/slingstar/.
+Every path in the app is relative and the service worker is scoped to its own folder, so the same
+files work there with no build step. Run `npm run precache` before merging a change to a shipped
+file, so the service worker version changes and returning players pick it up.
+
+**Local network:** `scripts/deploy.sh` publishes the game from a Mac to a phone on the same Tailscale network. It
 needs `node` and the `tailscale` CLI.
 
 ```sh

@@ -103,6 +103,7 @@ export const STORAGE = Object.freeze({
   SETTINGS: 'settings',                 // Settings
   FIRST_RUN: 'firstRun',                // FirstRunFlags
   RENDER_SCALE: 'renderScale',          // number 0.6..1.0
+  MISSIONS: 'missions',                 // meta/missions.js toJSON()
 });
 
 // ============================================================================ typedefs
@@ -365,6 +366,7 @@ export const STORAGE = Object.freeze({
  * @typedef {Object} Hud  src/ui/hud.js `createHud(root)`. Writes DOM only when a value changes.
  * @property {(world: WorldT) => void} update     Score, multiplier, combo.
  * @property {(type: number, x: number, y: number, a: number, b: number) => void} onEvent  e.g. zone banner, combo pop.
+ * @property {(label: string) => void} mission   "Mission complete" toast for a finished mission.
  * @property {(text: string | null) => void} prompt  First-run prompt ("RELEASE to fling", "HOLD to catch"); null hides.
  * @property {(visible: boolean) => void} setVisible
  * @property {() => void} resetRun
@@ -378,6 +380,17 @@ export const STORAGE = Object.freeze({
  * @property {number} zone
  * @property {number} bestCombo
  * @property {string} mode
+ * @property {MissionView[]} [missions]
+ * @property {number} [stars]       Stars earned from missions, all time.
+ */
+
+/**
+ * @typedef {Object} MissionView  One row of the mission list (title and game-over screens).
+ * @property {string} label
+ * @property {number} progress
+ * @property {number} target
+ * @property {boolean} done
+ * @property {boolean} fresh        Finished during the run that just ended.
  */
 
 /**
@@ -396,7 +409,7 @@ export const STORAGE = Object.freeze({
 /**
  * @typedef {Object} Screens  src/ui/screens.js `createScreens(root, handlers)`.
  * @property {(screen: string, data?: any) => void} show
- *   TITLE data: { best: number, mode: string, sound: boolean }
+ *   TITLE data: { best: number, mode: string, sound: boolean, daily?: string, missions?: MissionView[], stars?: number }
  *   PAUSED data: { sound: boolean, version: string }
  *   GAMEOVER data: GameOverData
  *   RESUME / ROTATE / PLAYING / BOOT: no data.

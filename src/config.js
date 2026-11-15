@@ -21,11 +21,15 @@ export const CONFIG = Object.freeze({
   MAX_FRAME_DT: 0.1,
 
   // ---------------------------------------------------------------- speed
-  /** Tuned 800 → 700 (Phase 2): a human-timed late press (~0.2 s) must still land inside the band. */
-  BASE_SPEED_START: 700,
+  /** Tuned 800 → 700 (Phase 2): a human-timed late press (~0.2 s) must still land inside the band.
+   * Gentler start (2026-11): 700 → 580 and BASE_SPEED_PER_ZONE 140 → 70, with the wider capture band,
+   * slower front and stretched ramp below. Most human-like bot deaths were flying into a planet
+   * before a press landed; together these doubled the median run (tests/humanbot.js: planner
+   * 25 → 52 s, reactive 34 → 61 s) while later zones still reach the speed cap. */
+  BASE_SPEED_START: 580,
   BASE_SPEED_CAP: 1600,
   /** Base speed added per zone after zone 1, until the cap. */
-  BASE_SPEED_PER_ZONE: 140,
+  BASE_SPEED_PER_ZONE: 70,
   /** Current speed cap = base speed × this. Orbiting speed growth stops here. Tuned 1.45 → 1.3
    * (Phase 2): at 1.45 the comet hit the cap within a handful of zone 1 catches. */
   SPEED_CAP_FACTOR: 1.3,
@@ -60,8 +64,9 @@ export const CONFIG = Object.freeze({
 
   // ---------------------------------------------------------------- collapse front
   FRONT_START_BELOW: 1500,
-  FRONT_SPEED_START: 220,
-  FRONT_ACCEL: 4,
+  /** Gentler start (2026-11): 220 → 180 and accel 4 → 2.5 u/s². */
+  FRONT_SPEED_START: 180,
+  FRONT_ACCEL: 2.5,
   /** Front speed never exceeds this fraction of the comet's base speed. */
   FRONT_SPEED_CAP_FRACTION: 0.75,
   FRONT_MAX_LAG: 2600,
@@ -69,15 +74,19 @@ export const CONFIG = Object.freeze({
   // ---------------------------------------------------------------- bodies
   PLANET_R_MIN: 60,
   PLANET_R_MAX: 130,
-  /** Capture band width (Rc - R) in zone 1 … and at/after zone 6. Linear in between.
-   * Zone 1 tuned 170 → 200 (Phase 2) so a new player's first catches are forgiving. */
-  CAPTURE_BAND_Z1: 200,
-  CAPTURE_BAND_Z6: 110,
+  /** Capture band width (Rc - R) in zone 1 … and at/after zone RAMP_END_ZONE. Linear in between.
+   * Zone 1 tuned 170 → 200 (Phase 2) so a new player's first catches are forgiving; gentler start
+   * (2026-11): 200 → 260, late 110 → 130. */
+  CAPTURE_BAND_Z1: 260,
+  CAPTURE_BAND_Z6: 130,
+  /** Zone at which the capture band and solve window reach their late (…_Z6) values, linear from
+   * zone 1 (gentler start, 2026-11: 6 → 8, with PATH_SPACING_LATE_ZONE). */
+  RAMP_END_ZONE: 8,
   PATH_SPACING_MIN: 520,
   PATH_SPACING_MAX_Z1: 900,
   PATH_SPACING_MAX_LATE: 1300,
   /** Zone at which PATH_SPACING_MAX_LATE is reached (linear from zone 1). */
-  PATH_SPACING_LATE_ZONE: 6,
+  PATH_SPACING_LATE_ZONE: 8,
   PLANET_X_MIN: 180,
   PLANET_X_MAX: 820,
   /** Fraction of planets that get a visual ring (render only; seeded). */
