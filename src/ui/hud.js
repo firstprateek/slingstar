@@ -70,6 +70,9 @@ export function createHud(root) {
   el('div', 'hud-combo-l', combo, 'COMBO');
   const perfect = el('div', 'hud-perfect', root, 'PERFECT');
   const sling = el('div', 'hud-perfect hud-sling', root, 'SLINGSHOT');
+  const missionEl = el('div', 'hud-mission', root);
+  el('div', 'hud-mission-k', missionEl, '★ MISSION COMPLETE');
+  const missionText = el('div', 'hud-mission-t', missionEl, '');
   const zone = el('div', 'hud-zone', root);
   const zoneN = el('div', 'hud-zone-n', zone, ZONE_LABELS[1]);
   const zoneName = el('div', 'hud-zone-name', zone, ZONES[0].name);
@@ -90,6 +93,7 @@ export function createHud(root) {
   const perfectFlash = new Retrigger(perfect, 'on');
   const slingFlash = new Retrigger(sling, 'on');
   const zoneBanner = new Retrigger(zone, 'on');
+  const missionToast = new Retrigger(missionEl, 'on');
 
   let longScore = false;
   /** Score shown in the DOM, when it was written (performance.now ms), and "write the next change at once". */
@@ -157,6 +161,10 @@ export function createHud(root) {
       else if (type === EV.LATCH) scoreNow = true;
       else if (type === EV.SLINGSHOT) slingFlash.fire();
     },
+    mission(label) {
+      missionText.textContent = label;
+      missionToast.fire();
+    },
     prompt(text) {
       if (text === lastPrompt) return;
       lastPrompt = text;
@@ -178,7 +186,7 @@ export function createHud(root) {
       if (longScore) { longScore = false; scoreEl.classList.remove('long'); }
       lastMult = 0; setMult(1);
       lastCombo = -1; setCombo(0);
-      comboPop.stop(); perfectFlash.stop(); slingFlash.stop(); zoneBanner.stop();
+      comboPop.stop(); perfectFlash.stop(); slingFlash.stop(); zoneBanner.stop(); missionToast.stop();
     },
   };
 }

@@ -21,6 +21,7 @@ import { createDebug } from './ui/debug.js';
 import { createInput } from './platform/input.js';
 import { createLifecycle } from './platform/lifecycle.js';
 import { storage } from './platform/storage.js';
+import { createMissions, emptyRunStats } from './meta/missions.js';
 import { registerServiceWorker, reload } from './platform/pwa.js';
 import { VERSION } from './version.js';
 
@@ -183,8 +184,15 @@ function boot(renderer) {
    */
   let resumeHold = false;
 
+  // Missions (meta/missions.js): progress only counts in real play, never under ?autoplay.
+  const missions = createMissions(storage.get(STORAGE.MISSIONS, null), Math.random);
+  const saveMissions = () => { if (!AUTOPLAY) storage.set(STORAGE.MISSIONS, missions.toJSON()); };
+  const runStats = emptyRunStats();
+  /** @type {import('./contracts.js').MissionView[]} */
+  const missionViews = missions.active;
+
   /** @type {import('./contracts.js').GameOverData} */
-  const overData = { score: 0, best: 0, newBest: false, zone: 1, bestCombo: 0, mode: settings.mode };
+  const overData = { score: 0, best: 0, newBest: false, zone: 1, bestCombo: 0, mode: settings.mode, missions: missionViews, stars: 0 };
   let accentPal = -1;
 
   const screens = createScreens(screensRoot, {
@@ -280,7 +288,10 @@ function boot(renderer) {
   function showTitle() {
     // The single title instruction: first run shows the HUD prompt "RELEASE to fling" in place of the hint.
     document.documentElement.classList.toggle('first-run', !AUTOPLAY && !firstRun.released);
-    go(SCREEN.TITLE, { best: readBest(settings.mode), mode: settings.mode, sound: settings.sound, daily: todayLabel() });
+    go(SCREEN.TITLE, {
+      best: readBest(settings.mode), mode: settings.mode, sound: settings.sound, daily: todayLabel(),
+      missions: AUTOPLAY ? [] : missionViews, stars: missions.stars,
+    });
   }
 
   /** Reset everything for a new run in place (no allocation-heavy work: well under 300ms). */
@@ -293,6 +304,7 @@ function boot(renderer) {
     hud.resetRun();
     nearT = -1; deathT = -1; timeScale = 1; acc = 0;
     botHeld = false; pendPressed = false; pendReleased = false; resumeHold = false;
+    beginMissionRun();
     setAccent(1);
   }
 
@@ -303,8 +315,38 @@ function boot(renderer) {
     go(SCREEN.PLAYING);
   }
 
+  let savedCatches = 0;
+  /** New run (also at boot and on a restart from pause, which banks the abandoned run's catches). */
+  function beginMissionRun() {
+    Object.assign(runStats, emptyRunStats());
+    savedCatches = 0;
+    if (AUTOPLAY) return;
+    missions.endRun();
+    missions.beginRun();
+    saveMissions();
+  }
+
+  /** Feed the run's progress to the missions; toast any that finish. */
+  function updateMissions() {
+    if (AUTOPLAY || !world.started) return;
+    const s = world.score;
+    runStats.path = s.pathReached; runStats.zone = s.zone; runStats.combo = s.bestCombo;
+    runStats.score = s.score; runStats.catches = s.catches; runStats.perfects = s.perfects;
+    const done = missions.update(runStats);
+    if (done.length === 0) {
+      // Keep the "total" mission's count safe if the run is abandoned (one write per new catch).
+      if (runStats.catches !== savedCatches) { savedCatches = runStats.catches; saveMissions(); }
+      return;
+    }
+    hud.mission(done.length === 1 ? done[0].label : done.map((m) => m.label).join(' · '));
+    savedCatches = runStats.catches;
+    saveMissions();
+  }
+
   /** Death: record the best score and fill the game-over card. */
   function onDeath() {
+    updateMissions();
+    if (!AUTOPLAY) { missions.endRun(); saveMissions(); }
     const s = world.score;
     const prev = readBest(world.mode, runDay);
     const newBest = s.score > prev && s.score > 0;
@@ -315,6 +357,8 @@ function boot(renderer) {
     overData.zone = s.zone;
     overData.bestCombo = s.bestCombo;
     overData.mode = world.mode;
+    overData.missions = AUTOPLAY ? [] : missionViews;
+    overData.stars = missions.stars;
   }
 
   /** UI accent follows the zone palette (CSS custom properties; only on change). @param {number} zone */
@@ -333,6 +377,13 @@ function boot(renderer) {
     switch (type) {
       case EV.NEAR_MISS:
         if (!world.dead && deathT < 0) nearT = 0;
+        if (!world.dead) runStats.near++;
+        break;
+      case EV.MOTE:
+        runStats.motes++;
+        break;
+      case EV.SLINGSHOT:
+        runStats.sling++;
         break;
       case EV.DEATH:
         deathT = 0; nearT = -1;
@@ -471,6 +522,7 @@ function boot(renderer) {
       if (acc >= STEP) acc = 0;   // hit the step cap: drop the backlog rather than spiral
       if (DEBUG) simMs = performance.now() - t0;
       dispatch();
+      if (screen === SCREEN.PLAYING && !world.dead) updateMissions();
       if (screen === SCREEN.GAMEOVER && overT >= 0) {
         overT += dtReal;
         if (AUTOPLAY && overT >= CONFIG.AUTOPLAY_RESTART_S) restart();
@@ -522,6 +574,7 @@ function boot(renderer) {
   // ---------------------------------------------------------------- start
   renderer.resetRun(world);
   setAccent(1);
+  beginMissionRun();   // swaps out missions finished in the last session
   showTitle();
   requestAnimationFrame(frame);
 }

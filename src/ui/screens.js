@@ -54,6 +54,53 @@ function fmt(n) {
 }
 
 /**
+ * Mission list (title and game-over cards): a header with the star count and one row per mission.
+ * Display only (no data-ui): on the title screen a hold that starts on it still plays.
+ * @param {HTMLElement} parent @param {string} cls
+ */
+function missionList(parent, cls) {
+  const box = el('div', 'missions ' + cls, parent);
+  const head = el('div', 'missions-head', box);
+  el('span', '', head, 'MISSIONS');
+  const starsEl = el('span', 'missions-stars', head, '');
+  /** @type {{ row: HTMLElement, text: HTMLElement, value: HTMLElement, bar: HTMLElement }[]} */
+  const rows = [];
+  for (let i = 0; i < 3; i++) {
+    const row = el('div', 'mission', box);
+    el('span', 'mission-check', row);
+    const text = el('span', 'mission-text', row, '');
+    const value = el('span', 'mission-value', row, '');
+    const track = el('span', 'mission-bar', row);
+    const bar = el('span', '', track);
+    rows.push({ row, text, value, bar });
+  }
+  return {
+    /**
+     * @param {import('../contracts.js').MissionView[] | undefined} list
+     * @param {number | undefined} stars
+     */
+    set(list, stars) {
+      const n = Array.isArray(list) ? list.length : 0;
+      box.hidden = n === 0;
+      starsEl.textContent = stars ? `★ ${fmt(stars)}` : '';
+      for (let i = 0; i < rows.length; i++) {
+        const r = rows[i], m = i < n && list ? list[i] : null;
+        r.row.hidden = !m;
+        if (!m) continue;
+        const target = Math.max(1, Number(m.target) || 1);
+        const p = Math.max(0, Math.min(target, Number(m.progress) || 0));
+        r.text.textContent = m.label;
+        r.value.textContent = m.done ? (m.fresh ? '+1 ★' : 'done') : p > 0 ? `${fmt(p)} / ${fmt(target)}` : '';
+        r.bar.style.width = `${Math.round((m.done ? 1 : p / target) * 100)}%`;
+        r.row.classList.toggle('done', !!m.done);
+        r.row.classList.toggle('fresh', !!m.fresh);
+        r.row.classList.toggle('started', p > 0);
+      }
+    },
+  };
+}
+
+/**
  * @param {HTMLElement} root
  * @param {import('../contracts.js').ScreenHandlers} handlers
  * @returns {import('../contracts.js').Screens}
@@ -64,6 +111,10 @@ export function createScreens(root, handlers) {
   let mode = MODE.ENDLESS;
   let sound = true;
   let gameoverShownAt = 0;
+  /** Mouse-and-keyboard device: hints name the click and the space bar instead of a tap. */
+  const desktop = typeof matchMedia === 'function' && matchMedia('(hover: hover) and (pointer: fine)').matches;
+  /** A play-again key went down on the armed game-over card; its keyup restarts. */
+  let overKeyDown = false;
   /** @type {ReturnType<typeof setTimeout> | 0} */
   let guardTimer = 0;
 
@@ -101,7 +152,9 @@ export function createScreens(root, handlers) {
   chipEndless.innerHTML = 'Endless<span class="chip-sub">new every run</span>';
   chipDaily.setAttribute('role', 'radio');
   chipEndless.setAttribute('role', 'radio');
-  el('div', 'title-hint', title, 'hold and release to play');
+  const titleHint = el('div', 'title-hint', title, 'hold and release to play');
+  if (desktop) el('small', '', titleHint, 'mouse button or space bar');
+  const titleMissions = missionList(title, 'title-missions');
 
   // ------------------------------------------------------------------ playing
   const playing = makeScreen('s-playing');
@@ -144,7 +197,8 @@ export function createScreens(root, handlers) {
   el('div', 'label small', comboStat, 'BEST COMBO');
   const comboValue = el('div', 'stat-v', comboStat, '0');
   const comboSub = el('div', 'stat-s', comboStat, 'in a row');
-  el('div', 'over-hint', over, 'tap anywhere to play again');
+  const overMissions = missionList(overTop, 'over-missions');
+  el('div', 'over-hint', over, desktop ? 'click or press space to play again' : 'tap anywhere to play again');
 
   // ------------------------------------------------------------------ resume
   const resume = makeScreen('s-resume scrim', true);
@@ -209,6 +263,33 @@ export function createScreens(root, handlers) {
   });
   onTap(rotate, () => {});
 
+  // Keyboard (desktop): Space / Enter on the game-over card plays again (on keyup, so the key's own
+  // keydown never reaches the new run as a press), Escape / P pauses and resumes.
+  window.addEventListener('keydown', (e) => {
+    if (e.ctrlKey || e.metaKey || e.altKey) return;   // Cmd/Ctrl+P stays the browser's print
+    const k = e.code;
+    const play = k === 'Space' || k === 'Enter' || k === 'NumpadEnter';
+    const pause = k === 'Escape' || k === 'KeyP';
+    // Enter on a focused button (Restart, Sound...) clicks that button, not a resume.
+    const onButton = document.activeElement instanceof HTMLButtonElement;
+    if (api.current === SCREEN.GAMEOVER && play) {
+      e.preventDefault();
+      if (!e.repeat && performance.now() - gameoverShownAt >= GAMEOVER_TAP_GUARD_MS) overKeyDown = true;
+    } else if (api.current === SCREEN.PLAYING && pause && !e.repeat) {
+      e.preventDefault();
+      handlers.onPause();
+    } else if ((api.current === SCREEN.PAUSED || api.current === SCREEN.RESUME) && (pause || (k === 'Enter' && !onButton)) && !e.repeat) {
+      e.preventDefault();
+      handlers.onResume();
+    }
+  });
+  window.addEventListener('keyup', (e) => {
+    const k = e.code;
+    if (!overKeyDown || (k !== 'Space' && k !== 'Enter' && k !== 'NumpadEnter')) return;
+    overKeyDown = false;
+    if (api.current === SCREEN.GAMEOVER) { e.preventDefault(); handlers.onRestart(); }
+  });
+
   let bootGone = false;
   function hideBoot() {
     bootGone = true;
@@ -237,6 +318,7 @@ export function createScreens(root, handlers) {
         const b = Number(d.best) || 0;
         best.style.visibility = b > 0 ? 'visible' : 'hidden';
         bestValue.textContent = fmt(b);
+        titleMissions.set(d.missions, d.stars);
       } else if (screen === SCREEN.PAUSED) {
         if (typeof d.sound === 'boolean') { sound = d.sound; reflectSound(); }
         version.textContent = d.version ? `build ${d.version}` : '';
@@ -254,7 +336,9 @@ export function createScreens(root, handlers) {
         const c = Math.max(0, Math.floor(Number(d.bestCombo) || 0));
         comboValue.textContent = String(c);
         comboSub.textContent = c === 1 ? 'catch' : 'in a row';
+        overMissions.set(d.missions, d.stars);
         gameoverShownAt = performance.now();
+        overKeyDown = false;
         over.classList.add('armed');
         if (guardTimer) clearTimeout(guardTimer);
         guardTimer = setTimeout(() => { over.classList.remove('armed'); guardTimer = 0; }, GAMEOVER_TAP_GUARD_MS);

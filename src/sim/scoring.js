@@ -32,9 +32,9 @@ export function baseSpeedForZone(zone) {
   return v > CONFIG.BASE_SPEED_CAP ? CONFIG.BASE_SPEED_CAP : v;
 }
 
-/** Linear 0..1 progress from zone 1 to zone 6 (used by band width and solve window). @param {number} zone */
+/** Linear 0..1 progress from zone 1 to zone RAMP_END_ZONE (used by band width and solve window). @param {number} zone */
 export function zoneT(zone) {
-  const t = (zone - 1) / 5;
+  const t = (zone - 1) / (CONFIG.RAMP_END_ZONE - 1);
   return t < 0 ? 0 : t > 1 ? 1 : t;
 }
 
