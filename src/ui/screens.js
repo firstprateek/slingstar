@@ -206,6 +206,24 @@ export function createScreens(root, handlers) {
   el('div', 'big-text', resume, 'Tap to resume');
   el('div', 'sub-text', resume, 'paused while you were away');
 
+  // ------------------------------------------------------------------ wide-screen help
+  // Beside the game column on wide windows (CSS shows it only where there is room).
+  const help = document.createElement('aside');
+  help.className = 'side-help';
+  help.setAttribute('aria-label', 'How to play');
+  help.innerHTML = desktop
+    ? '<h2>HOW TO PLAY</h2><dl>'
+      + '<dt><kbd>Space</kbd> / click</dt><dd>Hold to latch into orbit around a planet</dd>'
+      + '<dt>Let go</dt><dd>Fling off along the dotted aim line. It lights up when the throw reaches the next planet</dd>'
+      + '<dt><kbd>Esc</kbd> / <kbd>P</kbd></dt><dd>Pause</dd>'
+      + '<dt><kbd>Space</kbd></dt><dd>Play again after a run</dd></dl>'
+      + '<p>Stay ahead of the wall of light rising from below. Hold too long and the orbit decays into the planet.</p>'
+    : '<h2>HOW TO PLAY</h2><dl>'
+      + '<dt>Hold</dt><dd>Latch into orbit around a planet</dd>'
+      + '<dt>Let go</dt><dd>Fling off along the dotted aim line. It lights up when the throw reaches the next planet</dd></dl>'
+      + '<p>Stay ahead of the wall of light rising from below. Hold too long and the orbit decays into the planet.</p>';
+  document.body.appendChild(help);
+
   // ------------------------------------------------------------------ rotate
   const rotate = makeScreen('s-rotate', true);
   el('div', 'phone', rotate);
@@ -262,6 +280,24 @@ export function createScreens(root, handlers) {
     handlers.onRestart();
   });
   onTap(rotate, () => {});
+
+  // A click beside the game column (wide windows) counts as a tap on the game-over and resume
+  // overlays. Clicks inside the column reach those overlays' own handlers, which stop propagation.
+  // The press must start on that screen (after the game-over guard): a hold carried over from
+  // play and let go on the card is not a tap.
+  let sidePressOn = '';
+  window.addEventListener('pointerdown', (e) => {
+    sidePressOn = e.target instanceof Node && !root.contains(e.target)
+      && (api.current !== SCREEN.GAMEOVER || performance.now() - gameoverShownAt >= GAMEOVER_TAP_GUARD_MS)
+      ? api.current : '';
+  }, true);
+  window.addEventListener('click', (e) => {
+    const pressed = sidePressOn;
+    sidePressOn = '';
+    if (!(e.target instanceof Node) || root.contains(e.target) || pressed !== api.current) return;
+    if (pressed === SCREEN.GAMEOVER) handlers.onRestart();
+    else if (pressed === SCREEN.RESUME) handlers.onResume();
+  });
 
   // Keyboard (desktop): Space / Enter on the game-over card plays again (on keyup, so the key's own
   // keydown never reaches the new run as a press), Escape / P pauses and resumes.

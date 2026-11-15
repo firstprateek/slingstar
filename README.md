@@ -19,8 +19,10 @@ installs to the iPhone home screen from Safari and works offline.
 ## How to play
 
 - **The whole screen is the button.** Hold inside a planet's capture ring to orbit it; let go to
-  fly off in a straight line along the dotted aim line. On a computer, hold the mouse button or the
-  space bar. Space or Enter also plays again after a run; Escape or P pauses.
+  fly off in a straight line along the dotted aim line. On a computer, hold the mouse button
+  (anywhere in the window) or the space bar. Space or Enter also plays again after a run; Escape or
+  P pauses. Wide windows show the game in a centred portrait column, so you see as far ahead as
+  on a phone, with a how-to-play card beside it.
 - Press early and the hold stays armed: the comet latches the moment it enters a ring.
 - The aim line lights up in the zone's colour when releasing now would reach the next planet.
 - Orbits slowly decay. Hold too long and you crash into the planet.

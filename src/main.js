@@ -234,7 +234,9 @@ function boot(renderer) {
     onReload() { reload(); },
   });
 
-  const input = createInput(canvas, { onGesture: () => audio.unlock() });
+  // The whole window is the button: on a wide screen the game is a centred column, and a press
+  // beside it holds too (buttons and overlays carry data-ui, so they never start a hold).
+  const input = createInput(document.body, { onGesture: () => audio.unlock() });
 
   createLifecycle({
     onHide() {
