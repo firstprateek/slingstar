@@ -27,7 +27,7 @@ function isUi(t) {
 }
 
 /**
- * @param {HTMLElement} target   The element whose presses count (the game canvas).
+ * @param {HTMLElement} target   The element whose presses count (main.js: document.body, so the whole window).
  * @param {{ onGesture?: () => void, keyboard?: boolean }} [opts]
  *   keyboard (default true): Space bar holds.
  * @returns {import('../contracts.js').InputSource & { pointerCount: number, dispose: () => void }}

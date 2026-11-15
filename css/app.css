@@ -18,6 +18,10 @@
   /* Dark halo first (legible over a bright bloomed scene), then the glow. */
   --legible: 0 0 1px rgba(0, 0, 0, 0.9), 0 1px 3px rgba(0, 0, 0, 0.7), 0 0 12px rgba(0, 0, 0, 0.45);
   --font: ui-rounded, -apple-system, system-ui, "SF Pro Rounded", sans-serif;
+  /* The game column: the whole window on a phone; a centred portrait column on wider windows
+     (see "wide / desktop" below). Sizes that used vw use this instead. */
+  --cw: 100vw;
+  --cx: 0px;
   color-scheme: dark;
 }
 
@@ -33,11 +37,11 @@ button { font: inherit; color: inherit; -webkit-tap-highlight-color: transparent
 [hidden] { display: none !important; }
 
 #game {
-  position: absolute; left: 0; top: 0; display: block; z-index: 0;
-  width: 100vw; height: 100vh; height: 100dvh; background: var(--bg);
+  position: absolute; left: var(--cx); top: 0; display: block; z-index: 0;
+  width: var(--cw); height: 100vh; height: 100dvh; background: var(--bg);
 }
 #hud, #screens {
-  position: absolute; left: 0; top: 0; width: 100%; height: 100vh; height: 100dvh;
+  position: absolute; left: var(--cx); top: 0; width: var(--cw); height: 100vh; height: 100dvh;
   pointer-events: none; overflow: hidden;
 }
 #hud { z-index: 1; }
@@ -219,7 +223,7 @@ button { font: inherit; color: inherit; -webkit-tap-highlight-color: transparent
 .s-title { justify-content: flex-start; }
 .title-top { margin-top: calc(12vh - 10px); display: flex; flex-direction: column; align-items: center; }
 .wordmark {
-  position: relative; font-weight: 900; font-size: min(13.2vw, 64px); line-height: 1;
+  position: relative; font-weight: 900; font-size: min(calc(var(--cw) * 0.132), 64px); line-height: 1;
   letter-spacing: 0.07em; padding-left: 0.07em; color: #fff;
   text-shadow: 0 0 2px #fff, 0 0 10px rgba(var(--accent-rgb), 1), 0 0 28px rgba(var(--accent-rgb), 0.75),
     0 0 64px rgba(140, 90, 255, 0.65), 0 2px 4px rgba(0, 0, 0, 0.6);
@@ -273,7 +277,7 @@ button { font: inherit; color: inherit; -webkit-tap-highlight-color: transparent
   background: radial-gradient(120% 80% at 50% 45%, rgba(4, 5, 16, 0.45), rgba(2, 3, 10, 0.78));
   -webkit-backdrop-filter: blur(10px) saturate(1.2); backdrop-filter: blur(10px) saturate(1.2);
 }
-.panel { display: flex; flex-direction: column; align-items: stretch; gap: 12px; width: min(300px, 80vw); }
+.panel { display: flex; flex-direction: column; align-items: stretch; gap: 12px; width: min(300px, calc(var(--cw) * 0.8)); }
 .heading {
   font-weight: 900; font-size: 30px; letter-spacing: 0.3em; padding-left: 0.3em; margin-bottom: 14px; color: #fff;
   text-shadow: 0 0 10px rgba(var(--accent-rgb), 0.9), 0 0 30px rgba(var(--accent-rgb), 0.5);
@@ -301,7 +305,7 @@ button { font: inherit; color: inherit; -webkit-tap-highlight-color: transparent
 .over-top { margin-top: calc(13vh); display: flex; flex-direction: column; align-items: center; }
 .label { font-weight: 800; font-size: 12px; letter-spacing: 0.4em; padding-left: 0.4em; color: var(--muted); text-shadow: var(--legible); }
 .over-score {
-  margin-top: 6px; font-weight: 900; font-size: min(22vw, 92px); line-height: 1; color: #fff;
+  margin-top: 6px; font-weight: 900; font-size: min(calc(var(--cw) * 0.22), 92px); line-height: 1; color: #fff;
   font-variant-numeric: tabular-nums;
   text-shadow: 0 0 2px #fff, 0 0 16px rgba(var(--accent-rgb), 0.9), 0 0 44px rgba(var(--accent-rgb), 0.5), 0 3px 6px rgba(0, 0, 0, 0.6);
 }
@@ -315,7 +319,7 @@ button { font: inherit; color: inherit; -webkit-tap-highlight-color: transparent
 @keyframes newbest { from { box-shadow: 0 0 12px rgba(255, 196, 77, 0.5); } to { box-shadow: 0 0 30px rgba(255, 196, 77, 0.95); } }
 .over-best { margin-top: 14px; font-weight: 700; font-size: 14px; letter-spacing: 0.2em; color: var(--muted); text-shadow: var(--legible); }
 .over-best b { color: #fff; letter-spacing: 0.06em; margin-left: 0.4em; font-size: 17px; }
-.stats { margin-top: 30px; display: flex; gap: 12px; width: min(330px, 86vw); }
+.stats { margin-top: 30px; display: flex; gap: 12px; width: min(330px, calc(var(--cw) * 0.86)); }
 .stat {
   flex: 1; padding: 14px 10px 13px; border-radius: 18px; background: var(--glass); border: 1px solid var(--line);
   -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
@@ -354,7 +358,7 @@ button { font: inherit; color: inherit; -webkit-tap-highlight-color: transparent
 
 /* ---------------------------------------------------- missions */
 .missions {
-  width: min(340px, 88vw); box-sizing: border-box; padding: 10px 14px 8px; border-radius: 18px; text-align: left;
+  width: min(340px, calc(var(--cw) * 0.88)); box-sizing: border-box; padding: 10px 14px 8px; border-radius: 18px; text-align: left;
   background: var(--glass); border: 1px solid var(--line);
   -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); pointer-events: none;
 }
@@ -411,15 +415,57 @@ button { font: inherit; color: inherit; -webkit-tap-highlight-color: transparent
 #debug .warn { color: #ffb36b; }
 
 /* ============================================================== wide / desktop */
+/* Wider than a phone (laptops, desktops, tablets): the playfield is a fixed 1000 units wide and
+   the camera fits it to the column, so a full-width landscape view would show far less of the
+   climb ahead. The game runs in a centred portrait column instead (1:2, about a phone's shape);
+   the window around it shows a dimmed backdrop and, where there is room, a how-to-play card.
+   Mouse-and-keyboard devices only: a phone in Safari with its toolbars showing can be wider than
+   11:20 too, and touch devices keep the full screen (landscape gets the rotate overlay). */
+@media (min-aspect-ratio: 11/20) and (hover: hover) and (pointer: fine) {
+  /* Half the height, but never narrower than 340px (short windows) or wider than the window. */
+  :root { --cw: min(100vw, max(50vh, 340px)); --cx: calc((100vw - var(--cw)) / 2); }
+  @supports (height: 100dvh) { :root { --cw: min(100vw, max(50dvh, 340px)); } }
+  #debug { left: calc(var(--cx) + 6px); }
+  body {
+    background:
+      radial-gradient(60% 70% at 18% 30%, rgba(var(--accent-rgb), 0.10), transparent 70%),
+      radial-gradient(55% 65% at 85% 75%, rgba(120, 70, 220, 0.12), transparent 70%),
+      var(--bg);
+    transition: background 0.6s;
+  }
+  #game { box-shadow: 0 0 0 1px rgba(var(--accent-rgb), 0.18), 0 0 60px -10px rgba(var(--accent-rgb), 0.35); }
+}
+.side-help { display: none; }
+@media (min-aspect-ratio: 11/10) and (min-width: 880px) and (hover: hover) and (pointer: fine) {
+  .side-help {
+    display: block; position: absolute; z-index: 1; top: 50%; transform: translateY(-50%);
+    left: calc(var(--cx) + var(--cw) + 40px); width: min(260px, calc(var(--cx) - 64px));
+    pointer-events: none; text-align: left; color: var(--muted); text-shadow: var(--legible);
+  }
+  .side-help h2 {
+    margin: 0 0 14px; font-weight: 800; font-size: 11px; letter-spacing: 0.3em; color: var(--muted);
+  }
+  .side-help dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 12px 14px; align-items: baseline; }
+  .side-help dt { font-weight: 800; font-size: 12px; letter-spacing: 0.08em; color: #fff; white-space: nowrap; }
+  .side-help dd { margin: 0; font-size: 13px; line-height: 1.4; }
+  .side-help kbd {
+    display: inline-block; padding: 2px 7px; border-radius: 6px; border: 1px solid var(--line);
+    background: var(--glass); font: inherit; font-size: 11px; color: #fff;
+  }
+  .side-help p { margin: 18px 0 0; font-size: 12px; line-height: 1.45; color: var(--faint); }
+}
 @media (min-aspect-ratio: 3/4) {
   .title-hint, .over-hint { bottom: calc(var(--sab) + 6vh); }
-  /* Wide screens: the panel moves to the bottom-left corner, clear of the home planet and aim line. */
-  .title-missions { left: calc(var(--sal) + 20px); transform: none; bottom: calc(var(--sab) + 20px); width: 300px; }
+  .title-missions { bottom: calc(var(--sab) + 6vh + 58px); }
+}
+/* Very short windows: the title's mission list would cover the comet (it still shows on game over). */
+@media (max-height: 640px) {
+  .title-missions { display: none; }
 }
 /* Short screens (iPhone SE and landscape laptops): tighten the game-over card so the list fits. */
 @media (max-height: 720px) {
   .over-top { margin-top: 7vh; }
-  .over-score { font-size: min(18vw, 72px); }
+  .over-score { font-size: min(calc(var(--cw) * 0.18), 72px); }
   .stats { margin-top: 18px; }
   .stat { padding: 10px 8px 9px; }
   .mission { padding: 4px 0 6px; }

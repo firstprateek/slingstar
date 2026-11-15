@@ -234,7 +234,9 @@ function boot(renderer) {
     onReload() { reload(); },
   });
 
-  const input = createInput(canvas, { onGesture: () => audio.unlock() });
+  // The whole window is the button: on a wide screen the game is a centred column, and a press
+  // beside it holds too (buttons and overlays carry data-ui, so they never start a hold).
+  const input = createInput(document.body, { onGesture: () => audio.unlock() });
 
   createLifecycle({
     onHide() {
@@ -565,6 +567,9 @@ function boot(renderer) {
   window.addEventListener('resize', onResize);
   window.addEventListener('orientationchange', onResize);
   if (window.visualViewport) window.visualViewport.addEventListener('resize', onResize);
+  // The canvas can change size without a window resize: the wide-window column (css/app.css)
+  // switches on or off when the pointer type changes (a detached tablet keyboard, devtools).
+  if (typeof ResizeObserver === 'function') new ResizeObserver(onResize).observe(canvas);
   if (reducedQuery) {
     const onMotion = () => { reducedMotion = reducedQuery.matches; renderer.setReducedMotion(reducedMotion); };
     if (typeof reducedQuery.addEventListener === 'function') reducedQuery.addEventListener('change', onMotion);
