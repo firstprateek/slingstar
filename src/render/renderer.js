@@ -479,6 +479,18 @@ export function createRenderer(canvas, opts = {}) {
           if (!reduced) addShake(cam, 5);
           break;
         }
+        case EV.IMPACT: {
+          // The brace window opens: a hot ring at the contact point.
+          fx.addPulse(x, y, effect, 0.25, 70, 2.4, 0.7, 0.4);
+          if (!reduced) addShake(cam, 4);
+          break;
+        }
+        case EV.BRACE: {
+          burst(x, y, 120, 120, 640, 0.4, 1.0, 3, 8, 2.6, 2.2, 1.7, 0.7, 0.3, 1.2);
+          fx.addPulse(x, y, effect, 0.5, 200, 2.4, 1.9, 0.9);
+          if (!reduced) addShake(cam, CONFIG.PERFECT_SHAKE_PX * cam.viewW / cssW);
+          break;
+        }
         case EV.DEATH: {
           deathX = x; deathY = y; deathBirth = effect;
           deathTier[0] = tierCol[0]; deathTier[1] = tierCol[1]; deathTier[2] = tierCol[2];

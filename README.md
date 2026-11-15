@@ -26,6 +26,10 @@ installs to the iPhone home screen from Safari and works offline.
 - Press early and the hold stays armed: the comet latches the moment it enters a ring.
 - The aim line lights up in the zone's colour when releasing now would reach the next planet.
 - Orbits slowly decay. Hold too long and you crash into the planet.
+- **Brace:** flying into a planet, moon or black-hole core is not the end. Press within 0.2 s of
+  the hit (just before or just after) and the comet braces: it bounces off, loses a tenth of its
+  size and the combo resets. The hull meter shows the braces left (5 from full size); stardust
+  slowly regrows it. Miss the window, or brace with an empty hull, and the run ends.
 - Catching new planets builds your combo and multiplier (×1 to ×5). Bouncing off a side wall,
   re-catching the planet you just left, or lingering more than 2.5 laps resets it.
 - Graze close to a surface, collect stardust and slingshot past black holes for extra points.

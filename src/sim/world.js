@@ -105,6 +105,11 @@ const HASH_U32 = new Uint32Array(HASH_F64.buffer);
  *                                    line (-1 otherwise): not latchable while the comet still flies
  *                                    straight along that line (the line looked past its ring).
  * @property {number} passId          bodies.id of passSlot.
+ * @property {number} lastPress       w.time of the last press in free flight (a brace if a hit follows within BRACE_WINDOW_S).
+ * @property {number} impactT0        w.time the current brace window opened.
+ * @property {number} impactSlot      Body hit (slot and id), and the DEATH_CAUSE if the window closes unbraced.
+ * @property {number} impactId
+ * @property {number} impactCause
  */
 
 /** @returns {import('../contracts.js').Bodies} */
@@ -160,7 +165,7 @@ export function createWorld(opts = {}) {
       x: 0, y: 0, px: 0, py: 0, vx: 0, vy: 0, speed: 0, heading: 0,
       state: COMET.ORBIT, body: -1, bodyId: 0, lastBodyId: 0,
       orbitRadius: 0, orbitDir: 1, orbitAngle: 0, laps: 0, altitude: Infinity,
-      armed: false, grazing: false, wasHeld: false,
+      armed: false, grazing: false, wasHeld: false, size: 1, impact: -1,
     },
     bodies: createBodies(),
     motes: createMotes(),
@@ -190,6 +195,7 @@ export function createWorld(opts = {}) {
     grazeAcc: 0, streakLine: -1, streakIdx: 0, lapBroken: false,
     leftInside: false, leftSlot: -1, bhId: 0, bhSlot: -1, bhMin: 0, queued: false, relDx: 0, relDy: 1,
     passSlot: -1, passId: 0,
+    lastPress: -Infinity, impactT0: 0, impactSlot: -1, impactId: 0, impactCause: 0,
   };
   reset(world, sim, opts.seed ?? 1, opts.mode ?? MODE.ENDLESS);
   return world;
@@ -217,6 +223,8 @@ function reset(w, sim, seed, mode) {
   c.state = COMET.ORBIT; c.body = 0; c.bodyId = b.id[0]; c.lastBodyId = 0;
   c.orbitRadius = (b.r[0] + b.rc[0]) * 0.5; c.orbitDir = 1; c.orbitAngle = -Math.PI * 0.5;
   c.laps = 0; c.armed = false; c.grazing = false; c.wasHeld = false;
+  c.size = 1; c.impact = -1;
+  sim.lastPress = -Infinity; sim.impactSlot = -1; sim.impactId = 0;
   c.speed = w.baseSpeed;
   placeOnOrbit(w);
   c.px = c.x; c.py = c.y;
@@ -255,8 +263,19 @@ function step(w, sim, dt, input) {
   c.wasHeld = held;
 
   if (!w.dead) {
-    // A press in free flight latches at once inside a ring, otherwise arms the hold.
-    if (c.state === COMET.FREE && pressed && !tryLatch(w, sim, true)) c.armed = true;
+    if (c.state === COMET.FREE && c.impact >= 0) {
+      // Brace window: the comet sits at the contact point; a press braces, otherwise it dies.
+      c.impact = w.time - sim.impactT0;
+      if (pressed) brace(w, sim);
+      else if (c.impact > CONFIG.BRACE_WINDOW_S + 1e-9) {
+        c.impact = -1;
+        die(w, sim.impactCause, sim.impactSlot);
+      }
+    } else if (c.state === COMET.FREE && pressed) {
+      // A press in free flight latches at once inside a ring, otherwise arms the hold.
+      sim.lastPress = w.time;
+      if (!tryLatch(w, sim, true)) c.armed = true;
+    }
 
     if (c.state === COMET.ORBIT) {
       if (!w.started) {
@@ -274,7 +293,7 @@ function step(w, sim, dt, input) {
       else advanceOrbit(w, sim, dt, true);
     }
 
-    if (c.state === COMET.FREE) {
+    if (c.state === COMET.FREE && c.impact < 0) {
       if (!held) c.armed = false;
       advanceFree(w, sim, dt);
     }
@@ -361,6 +380,9 @@ function tryLatch(w, sim, isPress) {
     const rc = b.rc[i];
     const d2 = dx * dx + dy * dy;
     if (d2 >= rc * rc) continue;
+    // A press this close to the surface would latch an orbit that crashes at once: it is a brace
+    // (the swept hit that follows opens the impact with this press inside BRACE_WINDOW_S).
+    if (isPress && Math.sqrt(d2) - b.r[i] < CONFIG.CRASH_ALTITUDE + 2) continue;
     const score = Math.sqrt(d2) / rc + (b.id[i] === c.lastBodyId ? 10 : 0);
     if (score < bestScore) { bestScore = score; best = i; }
   }
@@ -549,7 +571,7 @@ function advanceFree(w, sim, dt) {
       if (rayCircleHit(c.px, c.py, ux, uy, b.x[i], b.y[i], rr) && OUT[0] <= len) {
         c.x = c.px + ux * OUT[0]; c.y = c.py + uy * OUT[0];
       }
-      die(w, deathCause(b.type[i]), i);
+      impact(w, sim, deathCause(b.type[i]), i);
       return;
     }
   }
@@ -652,6 +674,8 @@ function latchSwept(w, sim) {
     const r = b.rc[i] - LATCH_EPSILON;
     const cc = fx * fx + fy * fy - r * r;
     let t = 0;
+    // Already inside the ring and too close to the surface for an orbit: a brace, not a latch (tryLatch).
+    if (cc <= 0 && Math.sqrt(fx * fx + fy * fy) - b.r[i] < CONFIG.CRASH_ALTITUDE + 2) continue;
     if (cc > 0) {
       const bb = fx * ux + fy * uy;
       if (bb > 0) continue;
@@ -665,6 +689,62 @@ function latchSwept(w, sim) {
   c.x = c.px + ux * bestT; c.y = c.py + uy * bestT;
   latch(w, sim, best, false);
   return true;
+}
+
+// ================================================================ brace
+
+/**
+ * Free flight hit body `slot`: brace at once if the player pressed within BRACE_WINDOW_S before,
+ * otherwise stop at the contact point and open the brace window (step() resolves it).
+ * @param {WorldT} w @param {Sim} sim @param {number} cause DEATH_CAUSE @param {number} slot
+ */
+function impact(w, sim, cause, slot) {
+  const c = w.comet;
+  sim.impactSlot = slot; sim.impactId = w.bodies.id[slot]; sim.impactCause = cause;
+  sim.impactT0 = w.time;
+  pushEvent(w.events, EV.IMPACT, c.x, c.y, cause, slot);
+  if (w.time - sim.lastPress <= CONFIG.BRACE_WINDOW_S + 1e-9) { brace(w, sim); return; }
+  c.impact = 0;
+  c.armed = false;
+}
+
+/**
+ * Brace off the body hit: lose BRACE_SIZE_LOSS of size (fatal below BRACE_MIN_SIZE), bounce off
+ * the surface like a wall (combo resets) and leave it as if just released from it, so a hold
+ * does not latch its ring on the way out.
+ * @param {WorldT} w @param {Sim} sim
+ */
+function brace(w, sim) {
+  const c = w.comet, b = w.bodies, i = sim.impactSlot;
+  c.impact = -1;
+  sim.lastPress = -Infinity;   // one press, one brace
+  if (i < 0 || !b.alive[i] || b.id[i] !== sim.impactId) return;   // body recycled: fly on
+  const size = c.size - CONFIG.BRACE_SIZE_LOSS;
+  if (size < CONFIG.BRACE_MIN_SIZE - 1e-9) { die(w, sim.impactCause, i); return; }
+  c.size = size;
+  let nx = c.x - b.x[i], ny = c.y - b.y[i];
+  let d = Math.sqrt(nx * nx + ny * ny);
+  if (d < 1e-6) { nx = -c.vx; ny = -c.vy; d = Math.sqrt(nx * nx + ny * ny) || 1; }
+  nx /= d; ny /= d;
+  const out = b.r[i] + CONFIG.COMET_RADIUS + CONFIG.BRACE_PUSH_OUT;
+  c.x = b.x[i] + nx * out; c.y = b.y[i] + ny * out;
+  // The next swept collision test starts here, not at the contact point (which touches the body).
+  c.px = c.x; c.py = c.y;
+  const vn = c.vx * nx + c.vy * ny;
+  if (vn < 0) { c.vx -= 2 * vn * nx; c.vy -= 2 * vn * ny; }
+  let sp = c.speed * (1 - CONFIG.BRACE_SPEED_LOSS);
+  if (sp < w.baseSpeed) sp = w.baseSpeed;
+  const k = sp / (Math.sqrt(c.vx * c.vx + c.vy * c.vy) || 1);
+  c.vx *= k; c.vy *= k; c.speed = sp;
+  c.heading = Math.atan2(c.vy, c.vx);
+  c.armed = false;
+  sim.leftInside = b.type[i] === BODY.PLANET && b.rc[i] > 0;
+  sim.leftSlot = i;
+  sim.passSlot = -1; sim.passId = 0;
+  sim.relDx = c.vx / sp; sim.relDy = c.vy / sp;
+  sim.nmId[i] = b.id[i]; sim.nmState[i] = 2;   // the bounce is not also a near miss
+  comboBreak(w, COMBO_BREAK_REASON.BRACE);
+  pushEvent(w.events, EV.BRACE, c.x, c.y, c.size, i);
 }
 
 /** @param {WorldT} w @param {number} side -1 left, +1 right @param {number} x reflected x */
@@ -701,6 +781,7 @@ function pickMotes(w, sim) {
     else { sim.streakLine = line; sim.streakIdx = 0; }
     const pts = CONFIG.POINTS_MOTE * w.score.multiplier;
     w.score.score += pts;
+    if (c.size < 1) c.size = Math.min(1, c.size + CONFIG.BRACE_DUST_REFILL);
     pushEvent(w.events, EV.MOTE, m.x[i], m.y[i], sim.streakIdx, pts);
   }
   while (m.count > 0 && !m.alive[m.count - 1]) m.count--;
@@ -1209,7 +1290,7 @@ export function hashWorld(w) {
   let h = 0x811c9dc5;
   const c = w.comet;
   h = mix(h, c.x); h = mix(h, c.y); h = mix(h, c.vx); h = mix(h, c.vy); h = mix(h, c.state);
-  h = mix(h, w.score.score); h = mix(h, w.score.combo);
+  h = mix(h, w.score.score); h = mix(h, w.score.combo); h = mix(h, c.size);
   const b = w.bodies;
   for (let i = 0; i < b.count; i++) if (b.alive[i]) { h = mix(h, b.id[i]); h = mix(h, b.x[i]); h = mix(h, b.y[i]); }
   return h >>> 0;

@@ -124,7 +124,9 @@ test('black hole: bends free flight with accel = G / r², clamped, only inside t
 test('black hole: cannot be orbited (a press inside the influence only arms); the core kills', () => {
   const w = emptyWorld();
   const h = addBlackHole(w, 500, 3000);
-  setFree(w, 500, 2780, 0, 800); // 220 from the centre, inside the influence radius
+  // 290 from the centre, inside the influence radius, and slow: the core is reached well after
+  // BRACE_WINDOW_S, so this press only arms (it is not a brace).
+  setFree(w, 500, 2710, 0, 300);
   const d = driver(w);
   const ev = d.step(true);
   assert.equal(ofType(ev, EV.LATCH).length, 0);

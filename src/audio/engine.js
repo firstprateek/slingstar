@@ -105,6 +105,8 @@ export function createCore(ctx, masterLevel = MASTER_LEVEL) {
         case EV.ZONE_CHANGE: music.setZone(a); sfx.zoneChange(t, a); break;
         case EV.SLINGSHOT: sfx.slingshot(t); break;
         case EV.DEATH: sfx.death(t, a); core.closeFilter(t); break;
+        case EV.IMPACT: sfx.impact(t); break;
+        case EV.BRACE: sfx.brace(t); break;
         default: break;
       }
     },

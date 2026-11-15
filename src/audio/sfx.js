@@ -22,6 +22,8 @@ const SCALE = CONFIG.SCALE;
  * @property {(t: number, speed: number) => void} release
  * @property {(t: number, index: number) => void} mote
  * @property {(t: number) => void} bounce
+ * @property {(t: number) => void} impact
+ * @property {(t: number) => void} brace
  * @property {(t: number, tier: number) => void} tierUp
  * @property {(t: number, zone: number) => void} zoneChange
  * @property {(t: number) => void} slingshot
@@ -185,6 +187,21 @@ export function createSfx(g, music) {
       o.start(t); o.stop(end);
       onEnd(o, env);
       tone(t, f * 3, 0.025, 0.001, 0.02, 'sine', 0, g.sfxBus);
+    },
+
+    /** Hit a body: a dull thud as the brace window opens. */
+    impact(t) {
+      if (!pool.take(t, t + 0.4)) return;
+      glide(t, 140, 55, 0.1, 0.5, 0.002, 0.08, 'sine', g.sfxBus);
+      noiseSweep(t, 900, 300, 0.06, 0.7, 0.14, 0.001, 0.03, g.sfxBus, 'lowpass');
+    },
+
+    /** Braced: a hard knock and a bright ring. */
+    brace(t) {
+      if (!pool.take(t, t + 0.6)) return;
+      glide(t, 320, 110, 0.08, 0.5, 0.002, 0.05, 'triangle', g.sfxBus);
+      noiseSweep(t, 3200, 900, 0.05, 0.9, 0.16, 0.001, 0.02, g.sfxBus, 'bandpass');
+      tone(t + 0.02, 1320, 0.07, 0.002, 0.18, 'sine', 0, g.sfxBus);
     },
 
     bounce(t) {

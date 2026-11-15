@@ -215,12 +215,14 @@ export function createScreens(root, handlers) {
     ? '<h2>HOW TO PLAY</h2><dl>'
       + '<dt><kbd>Space</kbd> / click</dt><dd>Hold to latch into orbit around a planet</dd>'
       + '<dt>Let go</dt><dd>Fling off along the dotted aim line. It lights up when the throw reaches the next planet</dd>'
+      + '<dt>About to hit?</dt><dd>Press within 0.2 s of the impact to brace and bounce off (costs hull)</dd>'
       + '<dt><kbd>Esc</kbd> / <kbd>P</kbd></dt><dd>Pause</dd>'
       + '<dt><kbd>Space</kbd></dt><dd>Play again after a run</dd></dl>'
       + '<p>Stay ahead of the wall of light rising from below. Hold too long and the orbit decays into the planet.</p>'
     : '<h2>HOW TO PLAY</h2><dl>'
       + '<dt>Hold</dt><dd>Latch into orbit around a planet</dd>'
-      + '<dt>Let go</dt><dd>Fling off along the dotted aim line. It lights up when the throw reaches the next planet</dd></dl>'
+      + '<dt>Let go</dt><dd>Fling off along the dotted aim line. It lights up when the throw reaches the next planet</dd>'
+      + '<dt>About to hit?</dt><dd>Tap within 0.2 s of the impact to brace and bounce off (costs hull)</dd></dl>'
       + '<p>Stay ahead of the wall of light rising from below. Hold too long and the orbit decays into the planet.</p>';
   document.body.appendChild(help);
 

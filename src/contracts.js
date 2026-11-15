@@ -55,18 +55,21 @@ export const EV = Object.freeze({
   ZONE_CHANGE: 11, // a = new zone (1-based); b = previous zone
   SLINGSHOT: 12,   // x,y = comet; a = body index of the black hole; b = bonus points
   DEATH: 13,       // x,y = comet; a = DEATH_CAUSE; b = body index (-1 for the front)
+  IMPACT: 14,      // x,y = contact point; a = DEATH_CAUSE it would be; b = body index. The brace window opens.
+  BRACE: 15,       // x,y = comet after the bounce; a = comet size after; b = body index
 });
 
 /** Readable names for debug overlays and logs, indexed by EV value. */
 export const EV_NAME = Object.freeze([
   '', 'latch', 'perfect', 'release', 'graze', 'mote', 'nearMiss', 'bounce', 'comboUp',
-  'comboBreak', 'tierUp', 'zoneChange', 'slingshot', 'death',
+  'comboBreak', 'tierUp', 'zoneChange', 'slingshot', 'death', 'impact', 'brace',
 ]);
 
 export const COMBO_BREAK_REASON = Object.freeze({
   WALL: 0,
   RECATCH: 1,   // caught the planet just left
   LAPS: 2,      // stayed for COMBO_BREAK_LAPS laps
+  BRACE: 3,     // braced off a body
 });
 
 export const DEATH_CAUSE = Object.freeze({
@@ -187,6 +190,8 @@ export const STORAGE = Object.freeze({
  * @property {boolean} armed         Hold is down outside every ring; latches on ring entry.
  * @property {boolean} grazing       Altitude < GRAZE_ALTITUDE this step.
  * @property {boolean} wasHeld       `held` at the previous step (sim-internal edge tracking).
+ * @property {number} size           1 = full; each brace costs BRACE_SIZE_LOSS, stardust regrows it.
+ * @property {number} impact         Seconds since the comet hit a body and stopped (the brace window), -1 otherwise.
  */
 
 /**
