@@ -148,3 +148,59 @@ test('brace: the bounce does not hit the same body again on the next steps', () 
     assert.equal(w.dead, false);
   }
 });
+
+test('brace: the braced planet is not re-latched on the way out, even after a fresh press', () => {
+  const w = emptyWorld();
+  addPlanet(w, 500, 3000, 80, 250);
+  setFree(w, 500, 2700, 0, 600);   // inside the ring after a few steps, flying in without holding
+  const d = driver(w);
+  flyToImpact(w, d);
+  assert.equal(ofType(d.step(true), EV.BRACE).length, 1);
+  d.run(false, 3);
+  const ev = d.run(true, 120);    // press again while still inside its ring, and hold
+  assert.equal(ofType(ev, EV.LATCH).length, 0, 'no latch onto the planet just braced off');
+  assert.equal(w.dead, false);
+});
+
+test('brace: a hold kept down through the brace still catches the next ring', () => {
+  const w = emptyWorld();
+  addPlanet(w, 500, 3000, 80, 0);          // ringless: the comet hits it
+  const next = addPlanet(w, 500, 2200, 80, 250);
+  setFree(w, 500, 2700, 0, 600);
+  const d = driver(w);
+  const toHit = (300 - 88) / 600;
+  d.run(false, Math.floor((toHit - 0.1) / STEP));
+  const ev = d.run(true, 240);             // pressed 0.1 s early, held: brace, bounce down, catch
+  assert.equal(ofType(ev, EV.BRACE).length, 1);
+  const latch = ofType(ev, EV.LATCH);
+  assert.equal(latch.length, 1);
+  assert.equal(latch[0].a, next);
+  assert.equal(w.dead, false);
+});
+
+test('brace: a press that latched an orbit does not also brace a later hit', () => {
+  const w = emptyWorld();
+  addPlanet(w, 500, 3000, 80, 250);
+  const rock = addPlanet(w, 640, 2800, 30, 0);   // ringless, just along the release tangent
+  setFree(w, 500, 2800, 600, 0);                 // inside the ring, 120 above the surface, heading +x
+  const d = driver(w);
+  const ev = [...d.step(true), ...d.step(false)];  // tap: latch, then let go a step later
+  assert.equal(ofType(ev, EV.LATCH).length, 1);
+  assert.equal(ofType(ev, EV.RELEASE).length, 1);
+  const rest = d.run(false, 120);
+  const hit = ofType(rest, EV.IMPACT);
+  assert.equal(hit.length, 1, 'the flight hits the rock');
+  assert.equal(hit[0].b, rock);
+  assert.equal(ofType(rest, EV.BRACE).length, 0, 'the latching tap is not a brace');
+  assert.equal(ofType(rest, EV.DEATH).length, 1);
+});
+
+test('brace: the window is exactly BRACE_WINDOW_S', () => {
+  for (const [wait, ok] of [[WINDOW_STEPS - 1, true], [WINDOW_STEPS + 1, false]]) {
+    const { w, d } = setup();
+    flyToImpact(w, d);
+    d.run(false, wait);
+    const ev = d.step(true);
+    assert.equal(ofType(ev, EV.BRACE).length, ok ? 1 : 0, `press ${wait} steps in`);
+  }
+});

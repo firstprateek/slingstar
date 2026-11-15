@@ -34,7 +34,7 @@ export const MISSION_TYPES = Object.freeze([
   { id: 'score', targets: [2500, 6000, 12000, 20000, 35000], step: 15000, label: (n) => `Score ${fmt(n)} in one run` },
   { id: 'total', targets: [40, 120, 250, 500, 1000], step: 500, total: true, label: (n) => `Catch ${n} planets in total` },
   { id: 'near', targets: [1, 2, 3, 5], step: 2, minZone: 2, label: (n) => (n === 1 ? 'Survive a near miss' : `${n} near misses in one run`) },
-  { id: 'brace', targets: [1, 2, 3, 4], step: 1, label: (n) => (n === 1 ? 'Brace off a planet' : `Brace off ${n} planets in one run`) },
+  { id: 'brace', targets: [1, 2, 3, 4], step: 1, label: (n) => (n === 1 ? 'Brace through an impact' : `Brace through ${n} impacts in one run`) },
   { id: 'sling', targets: [1, 2, 3, 5], step: 2, minZone: 4, label: (n) => (n === 1 ? 'Slingshot past a black hole' : `${n} black-hole slingshots in one run`) },
 ]);
 

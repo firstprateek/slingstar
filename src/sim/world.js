@@ -264,13 +264,18 @@ function step(w, sim, dt, input) {
 
   if (!w.dead) {
     if (c.state === COMET.FREE && c.impact >= 0) {
-      // Brace window: the comet sits at the contact point; a press braces, otherwise it dies.
+      // Brace window: the comet sits at the contact point, moving with the body it hit; a press
+      // braces, otherwise it dies once the window has passed (exactly BRACE_WINDOW_S: closing is
+      // checked before the press).
       c.impact = w.time - sim.impactT0;
-      if (pressed) brace(w, sim);
+      const k = sim.impactSlot;
+      const there = k >= 0 && b.alive[k] === 1 && b.id[k] === sim.impactId;
+      if (there) { c.x += b.x[k] - b.px[k]; c.y += b.y[k] - b.py[k]; c.px = c.x; c.py = c.y; }
+      if (!there) c.impact = -1;                       // body recycled: fly on
       else if (c.impact > CONFIG.BRACE_WINDOW_S + 1e-9) {
         c.impact = -1;
-        die(w, sim.impactCause, sim.impactSlot);
-      }
+        die(w, sim.impactCause, k);
+      } else if (pressed) brace(w, sim);
     } else if (c.state === COMET.FREE && pressed) {
       // A press in free flight latches at once inside a ring, otherwise arms the hold.
       sim.lastPress = w.time;
@@ -434,6 +439,7 @@ function deathCause(ty) {
 /** @param {WorldT} w @param {Sim} sim @param {number} i @param {boolean} isPress */
 function latch(w, sim, i, isPress) {
   const c = w.comet, b = w.bodies, s = w.score;
+  sim.lastPress = -Infinity;   // that press caught a planet: it cannot also brace a later hit
   const rx = c.x - b.x[i], ry = c.y - b.y[i];
   let d = Math.sqrt(rx * rx + ry * ry);
   if (d < 1e-6) d = 1e-6;
@@ -737,9 +743,13 @@ function brace(w, sim) {
   const k = sp / (Math.sqrt(c.vx * c.vx + c.vy * c.vy) || 1);
   c.vx *= k; c.vy *= k; c.speed = sp;
   c.heading = Math.atan2(c.vy, c.vx);
-  c.armed = false;
+  // A hold that is still down stays armed for the next ring (the braced planet's own ring is
+  // excluded below, as for a planet just left).
+  c.armed = c.wasHeld;
+  if (b.type[i] === BODY.PLANET && b.rc[i] > 0) c.lastBodyId = b.id[i];
   sim.leftInside = b.type[i] === BODY.PLANET && b.rc[i] > 0;
   sim.leftSlot = i;
+  sim.bhId = 0;   // a brace off a core is not a slingshot pass
   sim.passSlot = -1; sim.passId = 0;
   sim.relDx = c.vx / sp; sim.relDy = c.vy / sp;
   sim.nmId[i] = b.id[i]; sim.nmState[i] = 2;   // the bounce is not also a near miss

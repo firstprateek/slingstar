@@ -459,3 +459,16 @@ test('a release on a lit aim line catches the lit planet (hazard zones, 40 seeds
   assert.ok(releases > 1500);
   assert.equal(broken, 0);
 });
+
+test('brace off a black-hole core pays no slingshot', async () => {
+  const { driver: drv } = await import('./helpers.js');
+  const w = emptyWorld();
+  addBlackHole(w, 500, 3000);
+  setFree(w, 500, 2710, 0, 300);
+  const d = drv(w);
+  let n = 0;
+  while (w.comet.impact < 0 && !w.dead && n++ < 600) d.step(false);
+  const ev = [...d.step(true), ...d.run(false, 240)];
+  assert.equal(ofType(ev, EV.BRACE).length, 1);
+  assert.equal(ofType(ev, EV.SLINGSHOT).length, 0);
+});
