@@ -413,7 +413,8 @@ button { font: inherit; color: inherit; -webkit-tap-highlight-color: transparent
 /* ============================================================== wide / desktop */
 @media (min-aspect-ratio: 3/4) {
   .title-hint, .over-hint { bottom: calc(var(--sab) + 6vh); }
-  .title-missions { bottom: calc(var(--sab) + 6vh + 58px); }
+  /* Wide screens: the panel moves to the bottom-left corner, clear of the home planet and aim line. */
+  .title-missions { left: calc(var(--sal) + 20px); transform: none; bottom: calc(var(--sab) + 20px); width: 300px; }
 }
 /* Short screens (iPhone SE and landscape laptops): tighten the game-over card so the list fits. */
 @media (max-height: 720px) {

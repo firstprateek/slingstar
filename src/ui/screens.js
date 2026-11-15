@@ -266,16 +266,19 @@ export function createScreens(root, handlers) {
   // Keyboard (desktop): Space / Enter on the game-over card plays again (on keyup, so the key's own
   // keydown never reaches the new run as a press), Escape / P pauses and resumes.
   window.addEventListener('keydown', (e) => {
+    if (e.ctrlKey || e.metaKey || e.altKey) return;   // Cmd/Ctrl+P stays the browser's print
     const k = e.code;
     const play = k === 'Space' || k === 'Enter' || k === 'NumpadEnter';
     const pause = k === 'Escape' || k === 'KeyP';
+    // Enter on a focused button (Restart, Sound...) clicks that button, not a resume.
+    const onButton = document.activeElement instanceof HTMLButtonElement;
     if (api.current === SCREEN.GAMEOVER && play) {
       e.preventDefault();
       if (!e.repeat && performance.now() - gameoverShownAt >= GAMEOVER_TAP_GUARD_MS) overKeyDown = true;
     } else if (api.current === SCREEN.PLAYING && pause && !e.repeat) {
       e.preventDefault();
       handlers.onPause();
-    } else if ((api.current === SCREEN.PAUSED || api.current === SCREEN.RESUME) && (pause || k === 'Enter') && !e.repeat) {
+    } else if ((api.current === SCREEN.PAUSED || api.current === SCREEN.RESUME) && (pause || (k === 'Enter' && !onButton)) && !e.repeat) {
       e.preventDefault();
       handlers.onResume();
     }

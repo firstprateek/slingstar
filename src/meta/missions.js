@@ -123,11 +123,12 @@ export function createMissions(saved, rand) {
   refresh();
 
   /**
-   * A type to replace a finished mission: not already shown, not the one just finished, and
-   * unlocked by bestZone. @param {string} finishedId
+   * A type to replace a finished mission: not already shown, none of the ones just finished, and
+   * unlocked by bestZone. @param {string[]} finishedIds
    */
-  function pickType(finishedId) {
-    const pool = MISSION_TYPES.filter((t) => t.id !== finishedId && !active.some((m) => m.id === t.id) && (t.minZone || 1) <= bestZone);
+  function pickType(finishedIds) {
+    let pool = MISSION_TYPES.filter((t) => !finishedIds.includes(t.id) && !active.some((m) => m.id === t.id) && (t.minZone || 1) <= bestZone);
+    if (!pool.length) pool = MISSION_TYPES.filter((t) => !active.some((m) => m.id === t.id) && (t.minZone || 1) <= bestZone);
     if (!pool.length) return MISSION_TYPES[0].id;
     let i = Math.floor(rand() * pool.length);
     if (!(i >= 0 && i < pool.length)) i = 0;
@@ -146,7 +147,7 @@ export function createMissions(saved, rand) {
   /** @param {string} id */
   function valueOf(id) {
     switch (id) {
-      case 'path': return run.path;
+      case 'path': return run.catches;
       case 'zone': return run.zone > 1 ? run.zone : 0;   // zone 1 is where every run starts: no progress yet
       case 'perfect': return run.perfects;
       case 'combo': return run.combo;
@@ -167,10 +168,11 @@ export function createMissions(saved, rand) {
     beginRun() {
       Object.assign(run, emptyRunStats());
       ended = false;
+      const finishedIds = active.filter((m) => m.done).map((m) => m.id);
       for (let i = 0; i < active.length; i++) {
         if (!active[i].done) { active[i].fresh = false; continue; }
-        const [old] = active.splice(i, 1);
-        active.splice(i, 0, make(pickType(old.id), false));
+        active.splice(i, 1);
+        active.splice(i, 0, make(pickType(finishedIds), false));
       }
       refresh();
     },
@@ -204,8 +206,10 @@ export function createMissions(saved, rand) {
       refresh();
     },
     toJSON() {
+      // The live run's catches are included, so a run closed mid-way (tab shut, app killed) still
+      // counts toward the total; the in-memory total only grows at endRun, so nothing counts twice.
       return {
-        v: 1, stars, totalCatches, bestZone, levels: { ...levels },
+        v: 1, stars, totalCatches: totalCatches + (ended ? 0 : run.catches), bestZone, levels: { ...levels },
         active: active.map((m) => ({ id: m.id, done: m.done })),
       };
     },

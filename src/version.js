@@ -1,3 +1,3 @@
 // @ts-check
 /** Build version. Rewritten by tools/build-precache.mjs. */
-export const VERSION = "0.1.0+8f6e1dd5";
+export const VERSION = "0.1.0+f0fc0502";

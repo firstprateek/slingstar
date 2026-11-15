@@ -22,15 +22,15 @@ test('missions: a new player starts with three distinct level-0 goals', () => {
 test('missions: progress, completion, star, swap on the next run, harder target next time', () => {
   const m = createMissions(null, seq(0));
   m.beginRun();
-  assert.equal(m.update(stats({ path: 5 })).length, 0);
+  assert.equal(m.update(stats({ catches: 5 })).length, 0);
   assert.equal(m.active[0].progress, 5);
-  const done = m.update(stats({ path: 8 }));
+  const done = m.update(stats({ catches: 8 }));
   assert.equal(done.length, 1);
   assert.equal(done[0].id, 'path');
   assert.equal(m.active[0].done, true);
   assert.equal(m.active[0].fresh, true);
   assert.equal(m.stars, 1);
-  assert.equal(m.update(stats({ path: 9 })).length, 0, 'a finished mission does not pay twice');
+  assert.equal(m.update(stats({ catches: 9 })).length, 0, 'a finished mission does not pay twice');
   m.endRun();
   m.beginRun();
   assert.notEqual(m.active[0].id, 'path', 'replaced by another type');
@@ -48,11 +48,11 @@ test('missions: zone-gated types are offered only after the player reaches that 
     m.beginRun();
     for (const x of m.active) assert.ok(x.id !== 'sling' && x.id !== 'near', `offered ${x.id} at best zone 1`);
     // Finish everything so all three get swapped.
-    m.update(stats({ path: 999, zone: 1, perfects: 999, combo: 999, motes: 999, score: 1e9, catches: 0 }));
+    m.update(stats({ catches: 999, zone: 1, perfects: 999, combo: 999, motes: 999, score: 1e9 }));
     m.endRun();
   }
   const n = createMissions({ bestZone: 4 }, seq(0.999));
-  n.update(stats({ path: 999, perfects: 999, zone: 9 }));
+  n.update(stats({ catches: 999, perfects: 999, zone: 9 }));
   n.endRun();
   n.beginRun();
   assert.ok(n.bestZone >= 4);
@@ -76,7 +76,7 @@ test('missions: the total mission adds catches across runs, banking each run onc
 test('missions: survive a save/load round trip, including a mission finished just before closing', () => {
   const m = createMissions(null, seq(0));
   m.beginRun();
-  m.update(stats({ path: 8, perfects: 1 }));
+  m.update(stats({ catches: 8, perfects: 1 }));
   m.endRun();
   const json = JSON.parse(JSON.stringify(m.toJSON()));
   const r = createMissions(json, seq(0));
@@ -95,4 +95,29 @@ test('missions: junk in storage starts fresh instead of throwing', () => {
     assert.equal(new Set(m.active.map((x) => x.id)).size, ACTIVE_COUNT);
     assert.ok(Number.isFinite(m.stars));
   }
+});
+
+test('missions: types finished together are all replaced by other types', () => {
+  for (let k = 0; k < 20; k++) {
+    const m = createMissions(null, seq(k / 20, (k * 7 % 20) / 20, (k * 13 % 20) / 20));
+    m.beginRun();
+    m.update(stats({ catches: 99, perfects: 99, zone: 3 }));
+    m.endRun();
+    m.beginRun();
+    for (const x of m.active) assert.ok(!['path', 'perfect', 'zone'].includes(x.id), `${x.id} came straight back`);
+  }
+});
+
+test('missions: a run closed mid-way still counts toward the total, and only once', () => {
+  const m = createMissions(null, seq(0));
+  m.beginRun();
+  m.update(stats({ catches: 30 }));
+  const mid = JSON.parse(JSON.stringify(m.toJSON()));
+  assert.equal(mid.totalCatches, 30, 'the live run is saved');
+  m.endRun();
+  assert.equal(m.toJSON().totalCatches, 30, 'banking it does not add it again');
+  const reloaded = createMissions(mid, seq(0));
+  reloaded.beginRun();
+  reloaded.update(stats({ catches: 2 }));
+  assert.equal(reloaded.toJSON().totalCatches, 32);
 });

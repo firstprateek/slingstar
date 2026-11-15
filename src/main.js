@@ -315,9 +315,11 @@ function boot(renderer) {
     go(SCREEN.PLAYING);
   }
 
+  let savedCatches = 0;
   /** New run (also at boot and on a restart from pause, which banks the abandoned run's catches). */
   function beginMissionRun() {
     Object.assign(runStats, emptyRunStats());
+    savedCatches = 0;
     if (AUTOPLAY) return;
     missions.endRun();
     missions.beginRun();
@@ -331,8 +333,13 @@ function boot(renderer) {
     runStats.path = s.pathReached; runStats.zone = s.zone; runStats.combo = s.bestCombo;
     runStats.score = s.score; runStats.catches = s.catches; runStats.perfects = s.perfects;
     const done = missions.update(runStats);
-    if (done.length === 0) return;
-    for (let i = 0; i < done.length; i++) hud.mission(done[i].label);
+    if (done.length === 0) {
+      // Keep the "total" mission's count safe if the run is abandoned (one write per new catch).
+      if (runStats.catches !== savedCatches) { savedCatches = runStats.catches; saveMissions(); }
+      return;
+    }
+    hud.mission(done.length === 1 ? done[0].label : done.map((m) => m.label).join(' · '));
+    savedCatches = runStats.catches;
     saveMissions();
   }
 
