@@ -140,3 +140,7 @@ What it changes on the Mac:
 
 It ends by printing the address to open on the phone. The service worker needs HTTPS (or
 localhost), which Tailscale Serve provides.
+
+## License
+
+[MIT](LICENSE) © 2026 Prateek Joshi
