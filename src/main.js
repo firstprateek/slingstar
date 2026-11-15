@@ -567,6 +567,9 @@ function boot(renderer) {
   window.addEventListener('resize', onResize);
   window.addEventListener('orientationchange', onResize);
   if (window.visualViewport) window.visualViewport.addEventListener('resize', onResize);
+  // The canvas can change size without a window resize: the wide-window column (css/app.css)
+  // switches on or off when the pointer type changes (a detached tablet keyboard, devtools).
+  if (typeof ResizeObserver === 'function') new ResizeObserver(onResize).observe(canvas);
   if (reducedQuery) {
     const onMotion = () => { reducedMotion = reducedQuery.matches; renderer.setReducedMotion(reducedMotion); };
     if (typeof reducedQuery.addEventListener === 'function') reducedQuery.addEventListener('change', onMotion);

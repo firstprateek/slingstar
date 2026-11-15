@@ -281,7 +281,7 @@ export function createScreens(root, handlers) {
   });
   onTap(rotate, () => {});
 
-  // A click beside the game column (wide windows) counts as a tap on the game-over and resume
+  // A press beside the game column (wide windows) counts as a tap on the game-over and resume
   // overlays. Clicks inside the column reach those overlays' own handlers, which stop propagation.
   // The press must start on that screen (after the game-over guard): a hold carried over from
   // play and let go on the card is not a tap.
@@ -291,7 +291,9 @@ export function createScreens(root, handlers) {
       && (api.current !== SCREEN.GAMEOVER || performance.now() - gameoverShownAt >= GAMEOVER_TAP_GUARD_MS)
       ? api.current : '';
   }, true);
-  window.addEventListener('click', (e) => {
+  // pointerup, not click: input.js cancels touchend off-UI, so a touch beside the column (touch
+  // laptops) never produces a click.
+  window.addEventListener('pointerup', (e) => {
     const pressed = sidePressOn;
     sidePressOn = '';
     if (!(e.target instanceof Node) || root.contains(e.target) || pressed !== api.current) return;

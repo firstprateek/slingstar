@@ -422,8 +422,10 @@ button { font: inherit; color: inherit; -webkit-tap-highlight-color: transparent
    Mouse-and-keyboard devices only: a phone in Safari with its toolbars showing can be wider than
    11:20 too, and touch devices keep the full screen (landscape gets the rotate overlay). */
 @media (min-aspect-ratio: 11/20) and (hover: hover) and (pointer: fine) {
-  :root { --cw: min(100vw, 50vh); --cx: calc((100vw - var(--cw)) / 2); }
-  @supports (height: 100dvh) { :root { --cw: min(100vw, 50dvh); } }
+  /* Half the height, but never narrower than 340px (short windows) or wider than the window. */
+  :root { --cw: min(100vw, max(50vh, 340px)); --cx: calc((100vw - var(--cw)) / 2); }
+  @supports (height: 100dvh) { :root { --cw: min(100vw, max(50dvh, 340px)); } }
+  #debug { left: calc(var(--cx) + 6px); }
   body {
     background:
       radial-gradient(60% 70% at 18% 30%, rgba(var(--accent-rgb), 0.10), transparent 70%),
@@ -455,6 +457,10 @@ button { font: inherit; color: inherit; -webkit-tap-highlight-color: transparent
 @media (min-aspect-ratio: 3/4) {
   .title-hint, .over-hint { bottom: calc(var(--sab) + 6vh); }
   .title-missions { bottom: calc(var(--sab) + 6vh + 58px); }
+}
+/* Very short windows: the title's mission list would cover the comet (it still shows on game over). */
+@media (max-height: 640px) {
+  .title-missions { display: none; }
 }
 /* Short screens (iPhone SE and landscape laptops): tighten the game-over card so the list fits. */
 @media (max-height: 720px) {
